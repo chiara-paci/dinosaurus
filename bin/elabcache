@@ -8,6 +8,7 @@ L_WINDOWS_CONVERTI_AWK=$BASE_DIR/lib/awk/windows_converti.awk
 L_WINDOWS_BONIFICA_AWK=$BASE_DIR/lib/awk/windows_bonifica.awk
 L_NMAP_OS_AWK=$BASE_DIR/lib/awk/nmap_os.awk
 L_PARSE_VIEW=$BASE_DIR/bin/parse_view.py
+L_WINEXE=$BASE_DIR/bin/winexe
 
 VAR_SPOOL=$BASE_DIR/var/spool
 
@@ -76,9 +77,33 @@ OUT_PREFIX=$OUT_SPOOL/elab
 
 mkdir -p $OUT_SPOOL
 
-## D estrae e scarica il dump del dns linux
+## D estrae e scarica il dump del dns linux e windows
+
+function get_ad {
+    local user="$1"
+    local host="$2"
+    local dir="$3"
+    
+    mkdir -p $dir
+    $L_WINEXE -U "$user" '//'"$host" 'dnscmd /EnumZones' > $dir/dns.desc
+    for zone_name in $( grep '^ ' $dir/dns.desc | \
+	grep -v "Zone name" | \
+	grep -v '^ _' | grep -v ' \.' | grep -v ' TrustAnchors' | \
+	awk '{ print $1 }' )
+    do
+	echo $dir $zone_name
+	$L_WINEXE -U "$user" '//'"$host" 'dnscmd /ZonePrint '"$zone_name" > $dir/"${zone_name}".txt
+    done
+
+}
+
 if [ "$fase_download" ]
 then
+    get_ad "$COLLAUDO_USER" "$COLLAUDO_HOST" $WINDOWS_DIR/Collaudo
+    get_ad "$INTRANET_USER" "$INTRANET_HOST" $WINDOWS_DIR/Intranet
+
+    find $WINDOWS_DIR -type f -exec dos2unix {} \;
+
     ssh $REM_USER@$REM_HOST rndc dumpdb -zones
     scp $REM_USER@$REM_HOST:/var/named/data/cache_dump.db $CACHE_DB
 fi
