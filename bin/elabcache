@@ -1,46 +1,40 @@
 #!/bin/bash
 
-BASE_DIR=/home/chiara/dinosaurus
+DNS_BASE_DIR=/home/chiara/dinosaurus
 
 #### file richiamati
 
-L_WINDOWS_CONVERTI_AWK=$BASE_DIR/lib/awk/windows_converti.awk
-L_WINDOWS_BONIFICA_AWK=$BASE_DIR/lib/awk/windows_bonifica.awk
-L_NMAP_OS_AWK=$BASE_DIR/lib/awk/nmap_os.awk
-L_PARSE_VIEW=$BASE_DIR/bin/parse_view.py
-L_WINEXE=$BASE_DIR/bin/winexe
+L_WINDOWS_CONVERTI_AWK=$DNS_BASE_DIR/lib/awk/windows_converti.awk
+L_WINDOWS_BONIFICA_AWK=$DNS_BASE_DIR/lib/awk/windows_bonifica.awk
+L_NMAP_OS_AWK=$DNS_BASE_DIR/lib/awk/nmap_os.awk
+L_PARSE_VIEW=$DNS_BASE_DIR/bin/parse_view.py
+L_WINEXE=$DNS_BASE_DIR/bin/winexe
 
-VAR_SPOOL=$BASE_DIR/var/spool
+VAR_SPOOL=$DNS_BASE_DIR/var/spool
 
-export PYTHONPATH=$PYTHONPATH:$BASE_DIR
+export PYTHONPATH=$PYTHONPATH:$DNS_BASE_DIR
 
-####
+#### optparse
 
 fase_download=""
 fase_linux=""
 fase_windows=""
 fase_parse=""
-fase_ping=""
-fase_nmap=""
-fase_collection=""
+fase_cmdb=""
 fase_virtualhost=""
 fase_vlans=""
-fase_win_static=""
 
 function help {
     echo "$0 -h | "
-    echo "$0 [ -P ] [ -W ] [ -D ] [ -L ] [ -S ] [ -C ] [ -N ] [ -H ] [ -V ] [ -Z ] <fconf>"
+    echo "$0 [ -P ] [ -W ] [ -D ] [ -L ] [ -C ] [ -H ] [ -V ] <fconf>"
     echo
     echo "-D: fase download"
     echo "-L: fase linux"
     echo "-W: fase windows"
     echo "-P: fase parse"
-    echo "-S: fase ping"
-    echo "-N: fase nmap"
-    echo "-C: fase collection"
+    echo "-C: fase cmdb"
     echo "-H: fase virtual host"
     echo "-V: fase vlans"
-    echo "-Z: fase win static"
 }
 
 while getopts "hDLWPSNCHVZ" opzione
@@ -50,11 +44,8 @@ do
 	D) fase_download="yes";;
 	L) fase_linux="yes";;
 	W) fase_windows="yes";;
-	Z) fase_win_static="yes";;
 	P) fase_parse="yes";;
-	S) fase_ping="yes";;
-	N) fase_nmap="yes";;
-	C) fase_collection="yes";;
+	C) fase_cmdb="yes";;
 	H) fase_virtualhost="yes";;
 	V) fase_vlans="yes";;
     esac
@@ -63,6 +54,8 @@ done
 set -e 
 
 fconf="${!OPTIND}"
+
+### Configurazione dell'elaborazione
 
 if [ "$fconf" ]
 then
@@ -75,9 +68,52 @@ fi
 OUT_SPOOL=$OUT_DIR/spool
 OUT_PREFIX=$OUT_SPOOL/elab
 
-mkdir -p $OUT_SPOOL
+#mkdir -p $OUT_SPOOL
 
-## D estrae e scarica il dump del dns linux e windows
+###################################################################################
+
+if [ "$fase_vlans" ]
+then
+    echo "Estraggo dal DB delle vlan"
+    echo "select * from vlan" | \
+	mysql -t -D $VLANS_DB -h $VLANS_HOST -C -u $VLANS_USER --skip-secure-auth -p$VLANS_PWD | \
+	tail -n +4 | head -n -1 | sed 's/^| *//g' | sed 's/ *|$//g' | sed 's/ *| */|/g' | sed 's/|NULL/|/g' | \
+	awk -F'|' '{
+                 split($1,netmask,".");
+                 mask=0;
+                 for (n in netmask) {
+                     mask=mask+8-log(256-netmask[n])/log(2);
+                 };
+                 printf("%s:%s:%s:%s:%s:%s:%s\n",$2,mask,$3,$4,$5,$6,$7);
+             }' > ${VLANS_DIR}/vlans-mysql.csv
+
+    echo "Merge con vlans-def"
+    cp ${VLANS_DIR}/vlans-def.csv  ${VLANS_DIR}/vlans.csv  
+    cat ${VLANS_DIR}/vlans-mysql.csv | grep -v "Sottorete" | while read row; do 
+	set $( echo $row | sed 's/:/ /g' )
+	if grep '^'$1':' ${VLANS_DIR}/vlans.csv > /dev/null
+	then
+	    continue
+	fi
+	echo $row >> ${VLANS_DIR}/vlans.csv
+    done
+fi
+
+if [ "$fase_cmdb" ]
+then
+    f_input=$CMDB_CSV
+    f_output=${CMDB_DIR}/cmdb.csv
+
+    echo "Converto CMDB"
+    awk -F';' 'BEGIN { host=""; desc=""; ip="" }
+               $1 != "" { host=$1; }
+               $NF != "" { ip=$NF; }
+               $2 != "" {
+                   desc=$2;
+                   for(n=3;n<NF;n++) desc=desc";"$n;   
+               }
+               { printf("%s;%s;%s\n"),host,ip,desc }' $f_input > $f_output
+fi
 
 function get_ad {
     local user="$1"
@@ -99,13 +135,19 @@ function get_ad {
 
 if [ "$fase_download" ]
 then
+    set +e
+    echo "Download Collaudo"
     get_ad "$COLLAUDO_USER" "$COLLAUDO_HOST" $WINDOWS_DIR/Collaudo
+
+    echo "Download Intranet"
     get_ad "$INTRANET_USER" "$INTRANET_HOST" $WINDOWS_DIR/Intranet
 
     find $WINDOWS_DIR -type f -exec dos2unix {} \;
 
+    echo "Download Linux"
     ssh $REM_USER@$REM_HOST rndc dumpdb -zones
     scp $REM_USER@$REM_HOST:/var/named/data/cache_dump.db $CACHE_DB
+    set -e
 fi
 
 if [ "$fase_linux" ]
@@ -116,20 +158,10 @@ then
                          if ($2=="Zone")  { zone=$5; next }
                          if ($2=="not" )  { printf("%s %s NOT\n",view,zone); next }
                        }
-             { printf("%s %s %s\n",view,zone,$0); }' > ${OUT_PREFIX}.linux
+             { printf("%s %s %s\n",view,zone,$0); }' > ${LINUX_PREFIX}.linux
 
-    grep NOT ${OUT_PREFIX}.linux > ${OUT_PREFIX}.linux_not
-    grep -v NOT ${OUT_PREFIX}.linux > ${OUT_PREFIX}.linux_yes
-    
-    awk '{ print $1 }' ${OUT_PREFIX}.linux | sort -u > ${OUT_PREFIX}.views_all
-    grep -v '^_' ${OUT_PREFIX}.views_all > ${OUT_PREFIX}.views
-    
-    for view in $(cat ${OUT_PREFIX}.views)
-    do
-	mkdir -p $OUT_SPOOL/$view
-	grep '^'$view' ' ${OUT_PREFIX}.linux_yes > ${OUT_SPOOL}/$view/completo
-	awk '{ print $2 }' ${OUT_SPOOL}/$view/completo | sort -u > ${OUT_SPOOL}/$view/zones
-    done
+    grep NOT ${LINUX_PREFIX}.linux > ${LINUX_PREFIX}.linux_not
+    grep -v NOT ${LINUX_PREFIX}.linux > ${LINUX_PREFIX}.linux_yes
 fi 
 
 if [ "$fase_windows" ]
@@ -149,7 +181,7 @@ then
 	    sed 's/^[ \t]/=== /g' | \
 	    awk -v zona="$zona" -v view="windows" -f $L_WINDOWS_BONIFICA_AWK
 
-    done > ${OUT_PREFIX}.windows
+    done > ${WINDOWS_PREFIX}.windows
 
     for f in $( find $WINDOWS_DIR -type f -a -name '*.txt' | grep '/Collaudo/' )
     do
@@ -165,34 +197,9 @@ then
 	    awk -f $L_WINDOWS_CONVERTI_AWK | sed 's/\[AGE:[0-9]*\]//g'  | sed 's/\[Aging:[0-9]*\]//g' | \
 	    sed 's/^[ \t]/=== /g' | \
 	    awk -v zona="$zona" -v view="collaudo" -f $L_WINDOWS_BONIFICA_AWK
-    done >> ${OUT_PREFIX}.windows
+    done >> ${WINDOWS_PREFIX}.windows
 fi
 
-if [ "$fase_vlans" ]
-then
-    echo "select * from vlan" | \
-	mysql -t -D $VLANS_DB -h $VLANS_HOST -C -u $VLANS_USER --skip-secure-auth -p$VLANS_PWD | \
-	tail -n +4 | head -n -1 | sed 's/^| *//g' | sed 's/ *|$//g' | sed 's/ *| */|/g' | sed 's/|NULL/|/g' | \
-	awk -F'|' '{
-                 split($1,netmask,".");
-                 mask=0;
-                 for (n in netmask) {
-                     mask=mask+8-log(256-netmask[n])/log(2);
-                 };
-                 printf("%s:%s:%s:%s:%s:%s:%s\n",$2,mask,$3,$4,$5,$6,$7);
-             }' > ${VLANS_DIR}/vlans-mysql.csv
-
-    cp ${VLANS_DIR}/vlans-def.csv  ${VLANS_DIR}/vlans.csv  
-
-    cat ${VLANS_DIR}/vlans-mysql.csv | while read row; do 
-	set $( echo $row | sed 's/:/ /g' )
-	if grep '^'$1':' ${VLANS_DIR}/vlans.csv > /dev/null
-	then
-	    continue
-	fi
-	echo $row >> ${VLANS_DIR}/vlans.csv
-    done
-fi
 
 if [ "$fase_parse" ]
 then
@@ -204,183 +211,18 @@ then
 	fi
 	mkdir -p "${OUT_DIR}/${d}"
     done
-    cat ${OUT_PREFIX}.linux_yes ${OUT_PREFIX}.windows > ${OUT_PREFIX}.all
-    $L_PARSE_VIEW ${OUT_PREFIX}.all ${OUT_DIR} ${NETSCAN_DIR} ${VLANS_DIR} ${DATIWEB_CSV}
+    cat ${LINUX_PREFIX}.linux_yes ${WINDOWS_PREFIX}.windows > ${OUT_SPOOL}/elab.all
+
+    $L_PARSE_VIEW ${OUT_SPOOL}/elab.all ${VLANS_DIR}/vlans.csv ${CMBD_DIR}/cmdb.csv ${OUT_DIR} ${OUT_LABEL}
+
     for h in $TARGET_HOSTS
     do
 	echo "${h}:"
-	echo "    ${OUT_DIR}/old_html/ => ${TARGET_WWW}/old_html/"
-	rsync -aqPH ${OUT_DIR}/old_html/ chiara-paci@${h}:${TARGET_WWW}/old_html/
-	echo "    ${OUT_DIR}/current_html/ => ${TARGET_WWW}/current_html/"
-	rsync -aqPH ${OUT_DIR}/current_html/ chiara-paci@${h}:${TARGET_WWW}/current_html/
-	echo "    ${OUT_DIR}/new_html/ => ${TARGET_WWW}/new_html/"
-	rsync -aqPH ${OUT_DIR}/new_html/ chiara-paci@${h}:${TARGET_WWW}/new_html/
+	echo "    ${OUT_DIR}/${OUT_LABEL}_html/ => ${TARGET_WWW}/${OUT_LABEL}_html/"
+	rsync -aqPH ${OUT_DIR}/${OUT_LABEL}_html/ chiara-paci@${h}:${TARGET_WWW}/${OUT_LABEL}_html/
 	echo "    ${OUT_DIR}/static/   => ${TARGET_WWW}/static/"
 	rsync -aqPH ${OUT_DIR}/static/   chiara-paci@${h}:${TARGET_WWW}/static/
-	scp   ${OUT_DIR}/index.html      chiara-paci@${h}:${TARGET_WWW}/
     done
 fi
 
-function ping_host {
-    local ip="$1"
-    local fname="$2"
-    case $ip in 
-	'::1')
-	    return;;
-	*);;
-    esac
 
-    (
-    	ping -nc 5 $ip 
-    	ret=$?
-    	echo "ret=$ret"
-    ) | grep -v '^$' | sed 's/^/'$ip' /g' >> "$fname"
-}
-
-export -f ping_host
-
-if [ "$fase_ping" ]
-then
-    f_input=${OUT_DIR}/ip_list_old.csv
-    f_ping_output=${NETSCAN_DIR}/ping.txt
-
-    rm $f_ping_output
-
-    parallel --gnu --jobs 700 --eta ping_host {1} {2} :::: $f_input ::: $f_ping_output
-fi
-
-function scan_host {
-    local ip="$1"
-    local fname="$2"
-    case $ip in 
-	'::1')
-	    return;;
-	*);;
-    esac
-
-    (
-	nmap -n -O --osscan-guess --traceroute $ip
-    ) | grep -v '^$' | sed 's/^/'$ip' /g' >> "$fname"
-}
-
-export -f scan_host
-
-if [ "$fase_nmap" ]
-then
-    f_input=${NETSCAN_DIR}/ping.txt
-    f_ping_ok=${NETSCAN_DIR}/ping_ok
-    f_ping_no=${NETSCAN_DIR}/ping_no
-    f_ping_errors=${NETSCAN_DIR}/ping_errors
-    f_nmap_output=${NETSCAN_DIR}/nmap.txt
-
-    rm -f $f_ping_ok
-    rm -f $f_ping_no
-    rm -f $f_ping_errors
-
-    grep packets $f_input | \
-	awk '{ ip=$1;
-               transmitted=$2;
-               received=$5;
-               time=$NF;
-               if (transmitted==received) flag="OK";
-               else flag="NO";
-               printf("%s:%s:%s:%s:%s:%s",flag,ip,transmitted,received,time,$7);
-               for(n=8;n<NF-1;n++) printf(" %s",$n);
-               printf("\n"); }' | \
-        awk -F':' -v f_ping_ok="$f_ping_ok" \
-                  -v f_ping_no="$f_ping_no" \
-                  -v f_ping_errors="$f_ping_errors" ' \
-             $1 == "OK" { printf("%s\n",$2) >> f_ping_ok; next }
-             $4 > 0 { printf("%s\n",$2) >> f_ping_ok; next }
-             $6 == "100% packet loss," { printf("%s\n",$2) >> f_ping_no; next }
-             { printf("%s\n",$2) >> f_ping_errors }'
-
-    rm -f $f_nmap_output
-
-    parallel --gnu --jobs 50 --eta scan_host {1} {2} :::: $f_ping_ok ::: $f_nmap_output
-
-fi 
-
-if [ "$fase_collection" ]
-then
-    f_input=${NETSCAN_DIR}/nmap.txt
-    f_output=${NETSCAN_DIR}/nmap_os
-    sort $f_input | awk -f $L_NMAP_OS_AWK > $f_output
-
-    f_input=$CMDB_CSV
-    f_output=${OUT_DIR}/cmdb.csv
-
-    awk -F';' 'BEGIN { host=""; desc=""; ip="" }
-               $1 != "" { host=$1; }
-               $NF != "" { ip=$NF; }
-               $2 != "" {
-                   desc=$2;
-                   for(n=3;n<NF;n++) desc=desc";"$n;   
-               }
-               { printf("%s;%s;%s\n"),host,ip,desc }' $f_input > $f_output
-fi
-
-if [ "$fase_win_static" ]
-then
-    f_output=${OUT_DIR}/win_dynamic.csv
-    d_input=$WINDOWS_DIR
-
-    rgrep -i '\[ag' $d_input  | sed 's:^.*/::g' | sed 's/.txt:/ /g' | \
-	awk 'BEGIN { h=""; }
-             { if ($2 !~ /^\[.*/) { 
-                   h=$2;
-                   start=4;
-               } else {
-                   start=3;
-               }
-               if (h=="@")
-                   printf("%s",$1);
-               else
-                   printf("%s.%s",h,$1);
-               for(n=start;n<=NF;n++) printf(" %s",$n);
-               printf("\n"); }' | \
-        grep -v '^_' > $f_output
-
-    # f_output=${OUT_DIR}/win_static.csv
-    # d_input=$WINDOWS_STATIC_DIR
-    # z_map=$WINDOWS_STATIC_DIR/zone.map
-
-    # rgrep -e '(A)' -e '(CNAME)' -e '(PTR)' $d_input/  | \
-    # 	sed 's:^'"$WINDOWS_STATIC_DIR"'/::g' | \
-    # 	grep static | \
-    # 	awk '{
-    #              type=$3;
-    #              gsub("\\(","",type); 
-    #              gsub("\\)","",type);
-    #              printf("%s %s",$1,type);
-    #              for(n=4;n<NF;n++) printf(" %s",$n);
-    #              printf("\n"); 
-    #          }' > $f_output
-
-
-    # cat $z_map | while read fname zona
-    # do
-    # 	sed 's;^'"$fname"':;'"$zona"' ;g' $f_output > ${f_output}.1
-    # 	mv ${f_output}.1 ${f_output}
-    # done
-
-    # awk '{
-    #         printf("%s.%s %s",$2,$1,$3);
-    #         for(n=4;n<=NF;n++) printf(" %s",$n);
-    #         printf("\n"); 
-    #      }' $f_output > ${f_output}.1
-    # mv ${f_output}.1 ${f_output}
-
-
-
-fi 
-
-
-if [ "$fase_virtualhost" ]
-then
-    echo "Da implementare"
-fi
-
-echo ${BASH_SOURCE[*]}
-readlink -f "$0"
-dirname $(readlink -f "$0")

@@ -1,0 +1,96 @@
+digraph {
+    V1 [label="vlans 1" shape=box];
+    V2 [label="vlans 2" shape=box];
+    C [label="cmdb" shape=box];
+
+    D1 [label="downloads 1" shape=box];
+    D2 [label="downloads 2" shape=box];
+    D3 [label="downloads 3" shape=box];
+
+    W1 [label="windows 1" shape=box];
+    W2 [label="windows 2" shape=box];
+
+    L1 [label="linux 1" shape=box];
+    L2 [label="linux 2" shape=box];
+    L3 [label="linux 3" shape=box];
+
+    P1 [label="parse 1" shape=box];
+    P2 [label="parse 2" shape=box style=filled color=green];
+    P3 [label="parse 3" shape=box];
+
+    vd_mysql     [label="${VLANS_DIR}/vlans-mysql.csv"];
+    vd_def       [label="${VLANS_DIR}/vlans-def.csv" style=filled fontcolor=white color=blue];
+    vd           [label="${VLANS_DIR}/vlans.csv"];
+
+    cd_cmdb_in   [label="$CMDB_CSV"     style=filled fontcolor=white color=blue];
+    cd_cmdb      [label="${CMDB_DIR}/cmdb.csv"];
+
+    mysql        [label="DB myp25stats" style=filled fontcolor=white color=blue];
+    win_dir      [label="$WINDOWS_DIR"];
+
+    ad_collaudo  [label="AD Collaudo" style=filled fontcolor=white color=blue];
+    ad_intranet  [label="AD Intranet" style=filled fontcolor=white color=blue];
+
+    dns          [label="$REM_USER/\n$REM_HOST" style=filled fontcolor=white color=blue];
+    cache        [label="$CACHE_DB"];
+
+    lp_linux     [label="${LINUX_PREFIX}.linux"];
+    lp_linux_not [label="${LINUX_PREFIX}.linux_not" style=filled fontcolor=white color=red];
+    lp_linux_yes [label="${LINUX_PREFIX}.linux_yes"];
+
+    wp_windows   [label="${WINDOWS_PREFIX}.windows"];
+
+    op_all       [label="${OUT_PREFIX}.all"];
+
+    od_pickle_current  [label="${OUT_DIR}/$PREFIX.all_current.pickle"];
+    od_pickle_new      [label="${OUT_DIR}/$PREFIX.all_new.pickle"];
+
+    od_html       [label="${OUT_DIR}/static/\n${OUT_DIR}/${OUT_LABEL}_html/" style=filled fontcolor=white color=red];
+    od_conf       [label="${OUT_DIR}/${OUT_LABEL}_build/" style=filled fontcolor=white color=red];
+    od_local_html [label="${OUT_DIR}/${OUT_LABEL}_local_html/\n${OUT_DIR}/static_local/"
+		  style=filled fontcolor=white color=red];	
+
+    www          [label="$TARGET_HOSTS" style=filled fontcolor=white color=red];
+
+
+    /*** rules ***/
+    mysql    -> V1 -> vd_mysql;
+    vd_def   -> V2 -> vd;
+    vd_mysql -> V2;
+
+    cd_cmdb_in -> C -> cd_cmdb;
+
+    ad_collaudo -> D1 -> win_dir;
+    ad_intranet -> D2 -> win_dir;
+    dns         -> D3 -> cache;
+
+    cache        -> L1 -> lp_linux;
+    lp_linux     -> L2 -> lp_linux_not;
+    lp_linux     -> L3 -> lp_linux_yes;
+
+    win_dir -> W1 -> wp_windows;
+    win_dir -> W2 -> wp_windows;
+    
+
+    lp_linux_yes -> P1;
+    wp_windows   -> P1 -> op_all;
+
+    vd                -> P2;
+    cd_cmdb           -> P2;
+
+    op_all            -> P2;
+    od_pickle_current -> P2;
+    od_pickle_new     -> P2;
+
+    P2 -> od_pickle_current;
+    P2 -> od_pickle_new;
+    P2 -> od_html;
+    P2 -> od_conf;
+    P2 -> od_local_html;
+
+    od_html -> P3 -> www;
+
+}
+
+
+

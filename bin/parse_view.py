@@ -14,14 +14,16 @@ PRIMARY_MASTER="rvvmdns03pl.server.intra.rve."
 EMAIL_ADMIN="nsmaster.regione.veneto.it."
 
 f_dati=sys.argv[1]
-out_dir=sys.argv[2]
-netscan_dir=sys.argv[3]
-vlans_dir=sys.argv[4]
+f_cmdb=sys.argv[2]
+f_vlans=sys.argv[3]
+out_dir=sys.argv[4]
+out_label=sys.argv[5]
+
 f_datiweb=sys.argv[5]
 
 input_basename=os.path.basename(f_dati)
 
-f_vlans=vlans_dir+"/vlans.csv"
+#f_vlans=vlans_dir+"/vlans.csv"
 f_ping_ok=netscan_dir+"/ping_ok"
 f_ping_errors=netscan_dir+"/ping_errors"
 
