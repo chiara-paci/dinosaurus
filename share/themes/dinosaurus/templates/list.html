@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<table class='full-width'>
+  {% set table = table_header %}
+  {% include "includes/table.html" %}
+
+  {% for table in table_rows %}
+  {% include "includes/table.html" %}
+  {% endfor %}
+
+</table>
+
+
+<script>
+    $('tr[data-href]').css( 'cursor', 'pointer' ).on('click', function() {
+        document.location = $(this).data('href');
+    });
+</script>
+
+{% endblock %}

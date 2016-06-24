@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block content %}
+<center><table>
+    <thead>
+      <tr>
+        <th class='center' colspan='3'>zone</th>
+        {% for lab in h_titles %}
+        <th class='center'>lab</th>
+	{% endfor %}
+      </tr>
+    </thead>
+
+</table></center>
+
+{% endblock %}

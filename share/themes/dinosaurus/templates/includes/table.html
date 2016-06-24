@@ -1,0 +1,35 @@
+{% if table.table %}
+<table{% if table.style %} class="{{ table.style }}"{% endif %}>
+{% if table.tbody %}<{{ table.tbody }}>{% endif %}
+{% elif table.tbody %}
+<{{ table.tbody }}{% if table.style %} class="{{ table.style }}"{% endif %}>
+{% endif %}
+
+{% for row in table._data %}
+<tr{% if row.style %} class="{{ row.style }}"{% endif %}{% if row.dom_id %} id="{{ row.dom_id }}"{% endif %}{% if row.data %}{% for k,v in row.data %} data-{{ k }}={{ v }}{% endfor %}{% endif %}>
+{% for cell in row %}
+{% if cell.colspan != 0 and cell.rowspan != 0 %}
+{% if cell.th %}<th{% else %}<td{% endif %}
+{% if cell.style %} class="{{ cell.style }}"{% endif %}
+{% if cell.back_color %} style="background:{{ cell.back_color }}"{% endif %}
+{% if cell.rowspan %} rowspan="{{ cell.rowspan }}"{% endif %}
+{% if cell.colspan %} colspan="{{ cell.colspan }}"{% endif %}>
+{% if cell.cell_type == "cellopen" %}
+<a name="{{ cell.name }}"></a>
+<a href="" class="open" id="open{{ cell.base_id }}"
+   data-close="#close{{ cell.base_id }}"
+   data-target="#{{ cell.row_id }}">&nbsp;<i class="fa fa-caret-right"></i>&nbsp;</a>
+<a href="" class="close" id="close{{ cell.base_id }}"
+   data-open="#open{{ cell.base_id }}"
+   data-target="#{{ cell.row_id }}">&nbsp;<i class="fa fa-caret-down"></i>&nbsp;</a>
+{% endif %}
+{{ cell.txt }}
+{% if cell.th %}</th>{% else %}</td>{% endif %}
+{% endif %}
+{% endfor %}
+
+</tr>
+{% endfor %}
+
+{% if table.tbody %}</{{ table.tbody }}>{% endif %}
+{% if table.table %}</table>{% endif %}

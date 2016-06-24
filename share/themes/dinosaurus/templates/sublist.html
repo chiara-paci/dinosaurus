@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<div class="pagination">
+  {% if previous %}
+  <a href="{{ previous.url }}"><i class="fa fa-arrow-left"></i>&nbsp; {{ previous.toc_title }}</a>
+  {% endif %}
+  {% if up %}
+  <a href="{{ up.url }}">&nbsp; index &nbsp;</a>
+  {% endif %}
+  {% if next %}
+  <a href="{{ next.url }}"><i class="fa fa-arrow-right"></i>&nbsp; {{ next.toc_title }}</a>
+  {% endif %}
+</div>
+
+<center><table class='full-width'>
+{% set table = table_header %}
+{% include "includes/table.html" %}
+
+{% for row in res_list %}
+
+{% set table = row.main %}
+{% include "includes/table.html" %}
+
+{% if row.hidden %}
+<tr id="{{ row.hidden.dom_id }}" class="start_hidden no_hover">
+  <th class="left"></th>
+  <td colspan="{{ row.main.num_cols - 1 }}" class="tab_cell_detail">
+    <h1>{{ row.hidden.title }}</h1>
+    {% for sub_title,sub_rows in row.hidden.sub_tabs %}
+    <h2>{{ sub_title }}</h2>
+    <table>
+      {% for table in sub_rows %}
+      {% include "includes/table.html" %}
+      {% endfor %}
+    </table>
+    {% endfor %}
+  </td>
+</tr>
+{% endif %}
+
+{% endfor %}
+</table></center>
+
+<div class="pagination">
+  {% if previous %}
+  <a href="{{ previous.url }}"><i class="fa fa-arrow-left"></i>&nbsp; {{ previous.toc_title }}</a>
+  {% endif %}
+  {% if up %}
+  <a href="{{ up.url }}">&nbsp; index &nbsp;</a>
+  {% endif %}
+  {% if next %}
+  <a href="{{ next.url }}"><i class="fa fa-arrow-right"></i>&nbsp; {{ next.toc_title }}</a>
+  {% endif %}
+</div>
+
+<script>
+
+$('tr.start_hidden').hide();
+$('a.close').hide();
+
+$('a.open').click(function(event){
+    event.preventDefault();
+    var target=$(this).data("target");
+    var close=$(this).data("close");
+    $(target).show();
+    $(close).show();
+    $(this).hide();
+});
+
+$('a.close').click(function(event){
+    event.preventDefault();
+    var target=$(this).data("target");
+    var open=$(this).data("open");
+    $(target).hide();
+    $(open).show();
+    $(this).hide();
+});
+
+</script>
+
+{% endblock %}

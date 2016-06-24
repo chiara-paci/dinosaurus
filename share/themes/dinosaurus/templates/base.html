@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="it" xml:lang="it">
+<head>
+
+<title>{{ page_title }}</title>
+
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<link rel="icon" href="{{ static_root }}/img/icon.png" type="image/png"/>
+
+<link rel="stylesheet" type="text/css" href="{{ static_root }}/css/font-awesome.min.css"/>
+<link rel="stylesheet" type="text/css" href="{{ static_root }}/css/dinosaurus.css"/>
+
+<script type="text/javascript" src="{{ static_root }}/js/jquery-1.11.3.min.js"></script>
+
+{% block add_head %}{% endblock %}
+
+</head>
+<body>
+
+{% block header %}
+<div id="header">
+
+  <div id="logo">
+    <img src="{{ static_root }}/img/logo-bw.png"/> <div class="title">{{ logo_title }}</div>
+  </div>
+
+  <div id="timestamp">{{ timestamp }}</div>
+
+  {% block menu_db %}
+  <div id="menu_db" class="menu noprint">
+    {% for url,label in menu_db %}
+    <a href="{{ url }}">{{ label }}</a>
+    {% endfor %}
+  </div>
+  {% endblock %}
+
+  {% block menu_main %}
+  <div id="menu_main" class="menu noprint">
+    {% for url,label in menu_main %}
+    <a href="{{ url }}">{{ label }}</a>
+    {% endfor %}
+  </div>
+  {% endblock %}
+
+</div>
+{% endblock header %}
+
+{% block body_content %}
+<h1>{{ page_title }}</h1>
+
+<div id="content">
+{% block content %}{% endblock %}
+</div> 
+
+{% endblock %}
+
+{% block footer %}
+<div id="footer">
+<img class="logo" src="{{ static_root }}/img/logo-bw.png" height="24pt"/> 
+<span class="big-letter">D</span>i<span class="big-letter">N</span>o<span class="big-letter">S</span>aurus {{ version }} 
+© 2015 Engineering Ingegneria Informatica S.p.A.
+</div>
+{% endblock footer %}
+
+</body>
+</html>

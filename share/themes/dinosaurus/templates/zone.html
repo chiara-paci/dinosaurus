@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+{% if zone.reduced != "multiple" %}
+
+    <div class="zone-classification">{{ zone.classification }}, {{ zone.reduced }}{% if is_reverse %}, reverse{% endif %} record types: {{ dns_types }}</div>
+    {% if zone.reduced == "single_view" %}
+    <div class="zone-views">view: {{ views }}</div>
+    {% else %}
+    <div class="zone-views">views: {{ views }}</div>
+    {% endif %}
+
+{% else %}
+    <div class="zone-classification">{{ zone.reduced }}{% if is_reverse %}, reverse{% endif %} record types: {{ dns_types }}</div>
+    <div class="zone-views">views sets:
+    <ul>
+    {% for view_set,classification in views %}
+    <li>{{ view_set }} ({{ classification }})</li>
+    {% endfor %}
+    </ul>
+    </div>
+{% endif %}
+
+
+<center><table>
+{% for row in rows %}
+<tbody>
+  <tr>
+    <td class="left"><a name="record{{ row.id }}"></a>{{ row.dns_class }} {{ row.dns_type }}</td>
+    <th class="left" colspan="5">{{ row.owner }}</th>
+  </tr>
+  {% for view_set,len_rdata,classification,rdata_list in row.merged %}
+  <tr>
+    {% if loop.first %}
+    <td class="left" rowspan="{{ row.rowspan }}"></td>
+    {% endif %}
+    <td class="left" rowspan="{{ len_rdata }}">{{ view_set }}</td>
+    <td class="left" rowspan="{{ len_rdata }}">{{ classification }}</td>
+    {% for rdata in rdata_list %}
+    {% if loop.first %}{% else %}<tr>{% endif %}
+    {% if rdata.ttl == "_" %}
+    <td class="left"></td>
+    {% else %}
+    <td class="left">{{ rdata.ttl }}</td>
+    {% endif %}
+    <td class="left">{{ rdata.data }}</td>
+    </tr>
+    {% endfor %}
+    
+    {% endfor %}
+
+    
+</tbody>
+
+{% endfor %}
+</table></center>
+
+<h1 class='on-new-page'>Zone files</h1>
+
+{% for view_set,txt in zone_texts %}
+{% if zone.reduced == "multiple" %}<h2>{{ view_set }}</h2>{% endif %}
+<center><pre>
+{{ txt }}
+</pre></center>
+{% endfor %}
+
+
+{% endblock %}
