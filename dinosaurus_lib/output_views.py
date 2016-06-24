@@ -4,10 +4,15 @@ import sys,re
 import os,datetime
 import shutil
 import math
+import jinja2
+
+import dinosaurus_lib.tcpip as dns_tcpip
+import dinosaurus_lib.config as dns_config
 
 from dinosaurus_lib.config import *
+from dinosaurus_lib.functions import *
 from dinosaurus_lib.dnsdatabase import Zone,Record
-from dinosaurus_lib.tables import Table
+from dinosaurus_lib.tables import Table,CellSequence
 from dinosaurus_lib.resolutions import ResName,ResIp
 
 class UrlResolver(object):
@@ -52,7 +57,8 @@ class UrlResolver(object):
         :param obj: un oggetto di tipo Zone, Record, ResIp, ResName o str
         :return: l'url corrispondente all'oggetto
 
-        Se obj è una stringa, tenta di capire se è un ip o un nome e restituisce rispettivamente l'url del ResIp o del ResName corrispondente.
+        Se obj è una stringa, tenta di capire se è un ip o un nome e restituisce rispettivamente l'url 
+        del ResIp o del ResName corrispondente.
 
         """
         D=self._get_urls_list(obj)
@@ -172,6 +178,8 @@ class ZoneOutputMethods(object):
         return T.items()
 
 class PaginationList(list):
+    template_row_name="includes/pagination_list_row.html"
+
     def __init__(self,pagination):
         list.__init__(self)
         self.pagination=pagination
@@ -208,23 +216,31 @@ class PaginationList(list):
         return None
 
     def toc_title_cells(self):
-        return "<td>"+str(self)+"</td>"
+        h1=CellSequence(1)
+        h1.set_val(unicode_convert(self),0)
+        return h1
 
     def toc_size_cells(self):
-        return "<td class='right'>"+str(len(self))+"</td>"
+        h1=CellSequence(1)
+        h1.set_val(unicode(len(self)),0)
+        h1.set_style("right")
+        return h1
 
     def toc_range_cells(self):
-        return "<td>"+str(self.first())+"</td>"+"<td>"+str(self.last())+"</td>"
+        h1=CellSequence(2)
+        h1.set_val(unicode_convert(self.first()),0)
+        h1.set_val(unicode_convert(self.last()),1)
+        return h1
         
-    def table_header(self):
-        return ""
+    # def table_header(self):
+    #     return ""
 
-    def html_row(self,row):
-        return "<tbody><tr><td>"+str(row)+"</td></tr></tbody>"
+    # def html_row(self,row):
+    #     return "<tbody><tr><td>"+str(row)+"</td></tr></tbody>"
 
-    def table_rows(self):
-        R=map(lambda r: self.html_row(r),self)
-        return R
+    # def table_rows(self):
+    #     R=map(lambda r: self.html_row(r),self)
+    #     return R
 
     def set_labelers_header(self,tab,start_col,num_rows):
         c=start_col
@@ -301,66 +317,30 @@ class Pagination(object):
             
         :return: Una stringa html con l'header.
         """
-
-        S="<thead><tr>"
-        for lab in [ "", "quantità", "first", "last" ]:
-            S+="<th>"+lab+"</th>"
-        S+="</tr></thead>\n"
-        return S
+        tab=Table(1,4,tbody="thead")
+        tab.set_all_th()
+        c=0
+        for lab in [ u"", u"quantità", u"first", u"last" ]:
+            tab.set_val(0,c,lab)
+            c+=1
+        return tab
 
 class PaginationListByIp(PaginationList):
-    def __init__(self,pagination,net,netmask,vlan_id=None,vlan_desc=None,vlan_net=None,vlan_netmask=None):
+    template_row_name="includes/pagination_list_byip_row.html"
+    def __init__(self,pagination,vlan):
         PaginationList.__init__(self,pagination)
-        self.net=net
-        self.netmask=netmask
-        self.vlan_id=vlan_id
-        self.vlan_desc=vlan_desc
-        self.vlan_net=vlan_net
-        self.vlan_netmask=vlan_netmask
-        self.public=self._public()
-        self.fixed=(self.vlan_id!=None) or (self.vlan_desc!=None)
-
-    def title_add(self): 
-        T=""
-        if self.vlan_id:
-            T+="["+str(self.vlan_id)+"] "
-        if not self.vlan_desc: return T
-        if self.vlan_desc.has_key("desc") and self.vlan_desc["desc"]:
-            T+=self.vlan_desc["desc"]
-        if self.vlan_desc.has_key("competenza") and self.vlan_desc["competenza"]:
-            T+=" ("+self.vlan_desc["competenza"]
-            if self.vlan_desc.has_key("dubbio") and self.vlan_desc["dubbio"]:
-                T+=self.vlan_desc["dubbio"]
-            T+=")"
-        return T
-
-    def _public(self):
-        if self.net=="no net": return False
-        if self.net=="sparse public addresses": return True
-        if self.netmask==0: return True
-        q=map(int,self.net.split("."))
-        if q[0] in [10,127]: return False
-        if q[0]==192 and q[1]==168: return False
-        if q[0]==172 and q[1] in range(16,32): return False
-        return True
+        self.vlan=vlan
+        self.fixed=self.vlan.fixed
+        self.public=self.vlan.public
 
     def __str__(self):
-        if self.net in ["no net","sparse public addresses"]:
-            return self.net
-        q=self.net.split(".")
-        if q[0]=="127":
-            return "localhost"
-        if self.netmask==0:
-            return "sparse public addresses"
-        if self.netmask==32: 
-            return self.net
-        return self.net+"/"+str(self.netmask)
+        return str(self.vlan)
 
     def __eq__(self,other):
-        return self.net==other.net and self.netmask==other.netmask
+        return self.vlan==other.vlan
 
     def __lt__(self,other):
-        return ip_cmp(self.net,other.net) < 0
+        return self.vlan < other.vlan
 
     def __le__(self,other):
         if self.__eq__(other): return True
@@ -374,159 +354,106 @@ class PaginationListByIp(PaginationList):
 
     def __ne__(self,other): return not self.__eq__(other)
 
+    def first(self): return str(self.vlan.net)
+    def last(self):  return str(self.vlan.last)
+
+    def range(self):
+        if self.vlan.netmask in [-1,0,32]: return ("","")
+        return self.first(),self.last()
+
+    def title_add(self): 
+        T=u""
+        if self.vlan.vid:
+            T+=u"["+unicode(self.vlan.vid)+u"] "
+        if not self.vlan.desc: return T
+        if self.vlan.desc.has_key("desc") and self.vlan.desc["desc"]:
+            T+=unicode_convert(self.vlan.desc["desc"])
+        if self.vlan.desc.has_key("competenza") and self.vlan.desc["competenza"]:
+            T+=u" ("+self.vlan.desc["competenza"]
+            if self.vlan.desc.has_key("dubbio") and self.vlan.desc["dubbio"]:
+                T+=self.vlan.desc["dubbio"]
+            T+=")"
+        return T
+
     # parte "title" dell'indice
     def toc_title_cells(self):
-        if self.net in ["no net","sparse public addresses"]:
-            return '<td colspan="9">'+self.net+'</td>'
-        if self.netmask == 0:
-            return '<td colspan="9">sparse public addresses</td>'
+        h1=CellSequence(9)
+        if isinstance(self.vlan,dns_tcpip.VirtualVLan):
+            h1.set_all_colspan()
+            h1.set_val(unicode_convert(self.vlan),0)
+            return h1
+        if self.vlan.localhost:
+            h1.set_all_colspan()
+            h1.set_val("localhost",0)
+            return h1
 
-        q=self.net.split(".")
-        if q[0]=="127":
-            return '<td colspan="9">localhost</td>'
-
-        h=map(lambda x: "",range(0,9))
-        if self.netmask not in [0,32]:
-            h[7]="&nbsp;/&nbsp;"
-            h[8]=str(self.netmask)
-
-        for i in [1,3,5]: h[i]="."
-        for i in [0,1,2,3]: h[2*i]=q[i]
-
-        H=""
-        for i in range(0,9):
-            tag='<td class="'
-            if i==0:
-                tag+="right border-left"
-            elif i in [1,3,5,7]:
-                tag+="center border-none"
-            elif i==8:
-                tag+="left border-right"
-            else:
-                tag+="right border-none"
-            tag+='">'
-            H+=tag+h[i]
-            if i==8:
-                H+="&nbsp;"
-            H+='</td>'
-            
-        return H
+        h1=CellSequence(9)
+        h1.set_val(".",1,3,5)
+        for i in [0,1,2,3]: 
+            h1.set_val(self.vlan.net[i],2*i)
+        h1.set_style("right border-none")
+        h1.set_style("right border-left",0)
+        h1.set_style("center border-none",1,3,5,7)
+        h1.set_style("left border-right",8)
+        if self.vlan.netmask not in [0,32]:
+            h1.set_val("&nbsp;/&nbsp;",7)
+            h1.set_val(self.vlan.netmask,8)
+        h1.add_val("&nbsp;",8)
+        return h1
 
     # parte "range" dell'indice
     def toc_range_cells(self):
-        if self.net in ["no net","sparse public addresses"]:
-            return "<td colspan='16'>&nbsp;</td>"
-        if self.netmask in [0,32]:
-            return "<td colspan='16'>&nbsp;</td>"
-        q=self.net.split(".")
-        if q[0]=="127":
-            return "<td colspan='16'>&nbsp;</td>"
-        q=self.first().split(".")
-        p=self.last().split(".")
+        if isinstance(self.vlan,dns_tcpip.VirtualVLan):
+            h1=CellSequence(22)
+            h1.set_all_colspan()
+            h1.set_val(u"&nbsp;",0)
+            return h1
+        if self.vlan.localhost:
+            h1=CellSequence(22)
+            h1.set_all_colspan()
+            h1.set_val(u"&nbsp;",0)
+            return h1
 
-        h=map(lambda x: "",range(0,14))
-        for i in [1,3,5,8,10,12]: h[i]="."
+        h1=CellSequence(14)
+
+        h1.set_val(u".",1,3,5,8,10,12)
         for i in [0,1,2,3]: 
-            h[2*i]=q[i]
-            h[2*i+7]=p[i]
+            h1.set_val(self.vlan.net[i],2*i)
+            h1.set_val(self.vlan.last[i],2*i+7)
+        h1.set_style(u"right border-none")
+        h1.set_style(u"right border-left",0,7)
+        h1.set_style(u"center border-none",1,3,5,8,10,12)
+        h1.set_style(u"left border-right",6,13)
+        h1.add_val(u"&nbsp;",6,13)
 
-        H=""
-        for i in range(0,14):
-            tag='<td class="'
-            if i in [0,7]:
-                tag+="right border-left"
-            elif i in [1,3,5,8,10,12]:
-                tag+="center border-none"
-            elif i in [6,13]:
-                tag+="left border-right"
-            else:
-                tag+="right border-none"
-            tag+='">'
-            H+=tag+h[i]
-            if i in [6,13]:
-                H+="&nbsp;"
-            H+='</td>'
-            
-        H+='<td class="center">'
-        if self.vlan_id:
-            H+=str(self.vlan_id)
-        H+='</td>'
+        h2=CellSequence(8)
+        h2.set_style(u"center")
 
-        params=["desc","location","address","competenza","dubbio","note","tabella"]
+        if self.vlan.vid:
+            h2.set_val(self.vlan.vid,0)
+        if not self.vlan.desc:
+            return h1+h2
 
-        if not self.vlan_desc:
-            for n in range(0,len(params)):
-                H+='<td class="center"></td>'
-            return H
+        params=[u"desc",u"location",u"address",u"competenza",u"dubbio",u"note",u"tabella"]
 
-        competenza_map={ "reti": "#c0ffd0", "eng": "#e0e0e0", "sanità": "#ffd0b0", "ibm": "#b0d0ff" }
+        if self.vlan.desc.has_key("competenza_color") and self.vlan.desc["competenza_color"]:
+            h2.set_back_color(self.vlan.desc["competenza_color"])
 
-        td_def='<td class="center"'
-        if self.vlan_desc.has_key("competenza") and self.vlan_desc["competenza"]:
-            if competenza_map.has_key(self.vlan_desc["competenza"]):
-                td_def+=' style="background:'+competenza_map[self.vlan_desc["competenza"]]+'"'
-            else:
-                td_def+=' style="background:yellow"'
-        td_def+='>'
+        for k in range(0,len(params)):
+            if self.vlan.desc.has_key(params[k]):
+                h2.set_val(self.vlan.desc[params[k]],k+1)
 
-        for k in params:
-            H+=td_def
-            if self.vlan_desc.has_key(k):
-                H+=str(self.vlan_desc[k])
-            H+='</td>'
-
-        return H
+        return h1+h2
 
     def known_vlan(self):
-        if self.vlan_id: return True
-        if not self.vlan_desc: return False
-        params=["desc","location","address","competenza","dubbio","note","tabella"]
-        for k in params:
-            if self.vlan_desc.has_key(k) and self.vlan_desc[k]:
-                return True
-        return False
-        
-    def range(self):
-        if self.net in ["no net","sparse public addresses"]:
-            return []
-        if self.netmask in [0,32]:
-            return []
-        q=self.net.split(".")
-        if q[0]=="127":
-            return []
-        return self.first(),self.last()
-
-    def first(self):
-        return self.net
-    
-    def last(self):
-        t=self.net.split(".")
-        if self.netmask>24:
-            net_base=t[0]+"."+t[1]+"."+t[2]+"."
-            net_suffix=""
-            ind=3
-            L=int(math.pow(2,32-self.netmask))
-        elif self.netmask>16:
-            net_base=t[0]+"."+t[1]+"."
-            net_suffix=".255"
-            ind=2
-            L=int(math.pow(2,24-self.netmask))
-        elif self.netmask>8:
-            net_base=t[0]+"."
-            net_suffix=".255.255"
-            ind=1
-            L=int(math.pow(2,16-self.netmask))
-        else:
-            net_base=""
-            net_suffix=".255.255.255"
-            ind=0
-            L=int(math.pow(2,8-self.netmask))
-        begin=int(t[ind])
-        end=begin+L-1
-        return net_base+str(end)+net_suffix
+        return self.vlan.fixed
 
     ### header della tabella della pagina specifica
-    def table_header(self):
+    # def table_header(self):
+    #     tab=self.table_header_ctx()
+    #     return str(tab)
+
+    def table_header_ctx(self):
         num_rows,num_cols=self.get_header_size(2,5)
         tab=Table(num_rows,num_cols,tbody="thead")
         tab.set_all_th()
@@ -539,9 +466,146 @@ class PaginationListByIp(PaginationList):
         tab.set_val(num_rows-1,2,"IN PTR")
         tab.set_val(num_rows-1,3,"IN A")
         tab.set_val(num_rows-1,4,"IN CNAME")
-        
         self.set_labelers_header(tab,5,num_rows)
-        return str(tab)
+
+        return tab
+
+    ### riga della tabella della pagina specifica (IP)
+    def html_row_ctx(self,row):
+        name_dict={}
+        for view_set,res_name in row.res_name_list:
+            key=res_name.name.lower()
+            if not name_dict.has_key(key):
+                name_dict[key]={ "ptr": [], "a": [], "cname": [] }
+            name_dict[key]["a"].append(view_set)
+            for cview_set,res_cname in res_name.res_cname_list:
+                ckey=res_cname.name.lower()
+                if view_set!=cview_set: continue
+                if not name_dict.has_key(ckey):
+                    name_dict[ckey]={ "ptr": [], "a": [], "cname": [] }
+                name_dict[ckey]["cname"].append(view_set)
+
+        for name,record_list in row.res.items():
+            key=name.lower()
+            if not name_dict.has_key(key):
+                name_dict[key]={ "ptr": [], "a": [], "cname": [] }
+            for view_set,record in record_list:
+                name_dict[key]["ptr"].append(view_set)
+
+        L=0
+        for name,desc in name_dict.items():
+            L+=max(len(desc["ptr"]),len(desc["a"]),len(desc["cname"]))
+
+        num_cols,style=self.get_data_params(row,5,[])
+
+        tab=Table(L,num_cols,style=style)
+        tab.set_open(0,0,"res"+str(row.id),str(row.id),"row"+str(row.id),str(row.ip))
+        tab.set_span(0,0,rowspan=L)
+        tab.set_style(0,0,th=True,style="left")
+
+        self.set_labelers_data(tab,row,0,5,L)
+
+        name_list=name_dict.keys()
+        name_list.sort()
+
+        r=0
+        for name in name_list:
+            desc=name_dict[name]
+            L=max(len(desc["ptr"]),len(desc["a"]),len(desc["cname"]))
+            tab.set_val(r,1,self.res_link(name))
+            tab.set_span(r,1,rowspan=L)
+            tab.set_style(r,1,th=True,style="left")
+
+            for ind,label in [ (2,"ptr"), (3,"a"), (4,"cname") ]:
+                rb=r
+                for view_set in desc[label]:
+                    tab.set_val(rb,ind,view_set.cell())
+                    rb+=1
+            r+=L
+
+
+        ### riga nascosta
+        covered={
+            "title": str(row.ip),
+            "sub_tabs": [],
+            "dom_id": "row"+str(row.id)
+        }
+
+        sub_title="IN PTR"
+        sub_rows=[]
+
+        sub_tab=Table(1,3,tbody="thead")
+        sub_tab.set_all_th()
+        sub_tab.set_val(0,0,"name")
+        sub_tab.set_val(0,1,"views")
+        sub_tab.set_val(0,2,"record")
+        sub_tab.set_row_style(0,"no-hover")
+
+        sub_rows.append(sub_tab)
+
+        for name,record_list in row.res.items():
+            sub_tab=Table(len(record_list),3)
+            sub_tab.set_span(0,0,rowspan=len(record_list))
+            sub_tab.set_val(0,0,self.res_link(name))
+            r=0
+            for view_set,record in record_list:
+                sub_tab.set_val(r,1,view_set.cell())
+                sub_tab.set_val(r,2,self.record_link(record))
+                r+=1
+            sub_rows.append(sub_tab)
+
+        covered["sub_tabs"].append( (sub_title,sub_rows) )
+
+        sub_title="IN A / IN CNAME"
+        sub_rows=[]
+
+        sub_tab=Table(2,5,tbody="thead")
+        sub_tab.set_all_th()
+        sub_tab.set_row_style(0,"no-hover")
+        sub_tab.set_row_style(1,"no-hover")
+        sub_tab.set_val(0,0,"IN A")
+        sub_tab.set_span(0,0,colspan=3)
+        sub_tab.set_val(0,4,"IN CNAME")
+        sub_tab.set_span(0,4,colspan=2)
+        sub_tab.set_val(1,0,"name")
+        sub_tab.set_val(1,1,"views")
+        sub_tab.set_val(1,2,"record")
+        sub_tab.set_val(1,3,"name")
+        sub_tab.set_val(1,4,"record")
+
+        sub_rows.append(sub_tab)
+        
+        for view_set,res_name in row.res_name_list:
+            key=res_name.name.lower()
+            cname_list=map(lambda x: x[1],filter(lambda x: x[0]==view_set,res_name.res_cname_list))
+            record_list=map(lambda x: x[1],filter(lambda x: x[0]==view_set,res_name.res[row.ip]))
+            
+            rowspan=max(1,len(cname_list),len(record_list))
+            n_tab=Table(rowspan,5)
+            n_tab.set_val(0,0,self.res_link(res_name.name))
+            n_tab.set_span(0,0,rowspan=rowspan)
+            n_tab.set_val(0,1,view_set.cell())
+            n_tab.set_span(0,1,rowspan=rowspan)
+
+            r=0
+            for record in record_list:
+                n_tab.set_val(r,2,self.record_link(record))
+                r+=1
+
+            r=0
+            for res_cname in cname_list:
+                n_tab.set_val(r,3,self.res_link(res_cname.name))
+                c_record_list=map(lambda x: x[1],filter(lambda x: x[0]==view_set,res_cname.res[res_name.name]))
+                s="<br/>".join(map(self.record_link,c_record_list))
+                n_tab.set_val(r,4,s)
+                r+=1
+            sub_rows.append(n_tab)
+
+        covered["sub_tabs"].append( (sub_title,sub_rows) )
+        #tab.set_val(last,1,S)
+
+        return {"main": tab,"hidden": covered }
+
 
     ### riga della tabella della pagina specifica (IP)
     def html_row(self,row):
@@ -671,316 +735,36 @@ class PaginationListByIp(PaginationList):
 
         return str(tab)
 
-class Ip(object):
-    def __init__(self,p3,p2,p1,p0):
-        self.p0=int(p0)
-        self.p1=int(p1)
-        self.p2=int(p2)
-        self.p3=int(p3)
-
-    def __eq__(self,other):
-        return ( (self.p0==other.p0) and (self.p1==other.p1) and (self.p2==other.p2) and (self.p3==other.p3) )
-
-    def __lt__(self,other):
-        if self.p3==127 and other.p3!=127:
-            return True
-        if other.p3==127 and self.p3!=127:
-            return False
-        if self.p3==10 and other.p3!=10:
-            return True
-        if other.p3==10 and self.p3!=10:
-            return False
-        if ( ((self.p3==172) and (self.p2 in range(16,32))) and 
-             ((other.p3!=172) or (other.p2 not in range(16,32))) ):
-            return True
-        if ( ((other.p3==172) and (other.p2 in range(16,32))) and 
-             ((self.p3!=172) or (self.p2 not in range(16,32))) ):
-            return False
-        if ( ((self.p3==192) and (self.p2==168)) and 
-             ((other.p3!=192) or (other.p2!=168)) ):
-            return True
-        if ( ((other.p3==192) and (other.p2==168)) and 
-             ((self.p3!=192) or (self.p2!=168)) ):
-            return False
-        if self.p3 < other.p3: return True
-        if self.p3 > other.p3: return False
-        if self.p2 < other.p2: return True
-        if self.p2 > other.p2: return False
-        if self.p1 < other.p1: return True
-        if self.p1 > other.p1: return False
-        if self.p0 < other.p0: return True
-        return False
-
-    def __ne__(self,other): return not self.__eq__(other)
-    def __gt__(self,other): return other.__lt__(self)
-    def __le__(self,other): return self.__eq__(other) or self.__lt__(other)
-    def __ge__(self,other): return self.__eq__(other) or self.__gt__(other)
-
-    # ip+num
-    def __add__(self,other):
-        if type(other)!=int:
-            return NotImplemented
-        if self.p0+other<=255:
-            return(Ip(self.p3,self.p2,self.p1,self.p0+other))
-        S=self.p0+other
-        riporto=S/256
-        new_p0=S%256
-        if self.p1+riporto<=255:
-            return(Ip(self.p3,self.p2,self.p1+riporto,new_p0))
-        S=self.p1+riporto
-        riporto=S/256
-        new_p1=S%256
-        if self.p2+riporto<=255:
-            return(Ip(self.p3,self.p2+riporto,new_p1,new_p0))
-        S=self.p2+riporto
-        riporto=S/256
-        new_p2=S%256
-        if self.p3+riporto<=255:
-            return(Ip(self.p3+riporto,new_p2,new_p1,new_p0))
-        return(Ip(255,new_p2,new_p1,new_p0))
-
-    # ip=ip-num o num=ip-ip
-    def __sub__(self,other): 
-        if type(other)==int: return self._sub_int(other)
-        return self._sub_ip(other)
-
-    def _sub_int(self,other):
-        if self.p0-other>=0:
-            return(Ip(self.p3,self.p2,self.p1,self.p0-other))
-        S=other-self.p0
-        riporto=S/256+1
-        new_p0=256-S%256
-        if self.p1-riporto>=0:
-            return(Ip(self.p3,self.p2,self.p1-riporto,new_p0))
-        S=riporto-self.p1
-        riporto=S/256+1
-        new_p1=256-S%256
-        if self.p2-riporto>=0:
-            return(Ip(self.p3,self.p2-riporto,new_p1,new_p0))
-        S=riporto-self.p2
-        riporto=S/256+1
-        new_p2=256-S%256
-        if self.p3-riporto>=0:
-            return(Ip(self.p3-riporto,new_p2,new_p1,new_p0))
-        return(Ip(0,new_p2,new_p1,new_p0))
-
-    def _sub_ip(self,other): 
-        return self.__int__()-other.__int__()
-
-    def __int__(self):
-        return self.p0+256*self.p1+256*256*self.p2+256*256*256*self.p3
-
-    # num+ip
-    def __radd__(self,other): return self.__add__(other)
-
-    def __str__(self):
-        return ".".join(map(str,[self.p3,self.p2,self.p1,self.p0]))
-
-    def __hash__(self):
-        return hash(str(self))
-
-class VLan(object):
-    def __init__(self,net,netmask=-1,last="",obj=None):
-        self.obj=obj
-        if type(net)==Ip:
-            self.net=net
-        else:
-            t_net=tuple(map(int,net.split(".")))
-            self.net=Ip(t_net[0],t_net[1],t_net[2],t_net[3])
-        if last:
-            if type(last)==Ip:
-                self.last=last
-            else:
-                t_last=tuple(map(int,last.split(".")))
-                self.last=Ip(t_last[0],t_last[1],t_last[2],t_last[3])
-        else:
-            self.last=None
-        self.netmask=netmask
-
-        if (self.netmask<0) and self.last:
-            L=self.last-self.net+1
-            self.netmask=32-int(math.log(L,2))
-            return
-
-        if (self.netmask>=0) and not self.last:
-            L=int(math.pow(2,32-self.netmask))
-            self.last=self.net+L-1
-
-    def __str__(self):
-        return str(self.net)+"/"+str(self.netmask)
-
-    def __eq__(self,other):
-        return self.net==other.net and self.netmask==other.netmask
-
-    def __lt__(self,other):
-        return self.net<other.net
-
-    def __ne__(self,other): return not self.__eq__(other)
-    def __gt__(self,other): return other.__lt__(self)
-    def __le__(self,other): return self.__eq__(other) or self.__lt__(other)
-    def __ge__(self,other): return self.__eq__(other) or self.__gt__(other)
-
-    def contains(self,ip):
-        return (ip>=self.net) and (ip<=self.last)
 
 class PaginationByIp(Pagination):
-    def __init__(self,res_list,object_per_page,url_resolver,vlan_list,ping_map):
+    def __init__(self,res_list,object_per_page,url_resolver,vlan_manager):
         Pagination.__init__(self,res_list,object_per_page,url_resolver)
-        self.vlan_list=vlan_list
-        self.ping_map=ping_map
-
-    # il massimo divisore potenza di due di int(first) è la lunghezza della rete massima di cui first è netaddress
-    def _split_vlans(self,first,last):
-        def to_ip(s):
-            if type(s)==Ip: return s
-            d=map(int,s.split("."))
-            return Ip(d[0],d[1],d[2],d[3])
-        first=to_ip(first)
-        last=to_ip(last)
-        if first==last: return []
-        q=int(first)
-        n=1
-        while n<=math.pow(2,32):
-            if (q%n)!=0:
-                break
-            n*=2
-        n/=2
-        while last<first+n-1: n/=2
-
-        if last==first+n-1:
-            return [VLan(first,last=first+n-1)]
-        return [VLan(first,last=first+n-1)]+self._split_vlans(first+n,last)
-
-
-    def _add_vlans(self,aggiungi,first,vnet):
-        if not aggiungi: return (False,[],None)
-        if first>=vnet.net:
-            return (aggiungi,[],vnet.last+1)
-
-        if first.p3==vnet.net.p3:
-            v_list=self._split_vlans(first,vnet.net-1)
-            return (aggiungi,v_list,vnet.last+1)
-        
-        if first.p3==10:
-            v_list=self._split_vlans(first,"10.255.255.255")
-            if vnet.net.p3==172 and vnet.net.p2 in range(16,32):
-                new_first=Ip(172,16,0,0)
-                if new_first!=vnet.net:
-                    v_list+=self._split_vlans(new_first,vnet.net-1)
-                return (aggiungi,v_list,vnet.last+1)
-            v_list+=self._split_vlans("172.16.0.0","172.31.255.255")
-            if vnet.net.p3==192 and vnet.net.p2==168:
-                new_first=Ip(192,168,0,0)
-                if new_first!=vnet.net:
-                    v_list+=self._split_vlans(new_first,vnet.net-1)
-                return (aggiungi,v_list,vnet.last+1)
-            v_list+=self._split_vlans("192.168.0.0","192.168.255.255")
-            return (False,v_list,None)
-
-        if first.p3==172 and first.p2 in range(16,32):
-            v_list=self._split_vlans(first,"172.31.255.255")
-            if vnet.net.p3==192 and vnet.net.p2==168:
-                new_first=Ip(192,168,0,0)
-                if new_first!=vnet.net:
-                    v_list+=self._split_vlans(new_first,vnet.net-1)
-                return (aggiungi,v_list,vnet.last+1)
-            v_list+=self._split_vlans("192.168.0.0","192.168.255.255")
-            return (False,v_list,None)
-
-        if first.p3==192 and first.p2==168:
-            v_list=self._split_vlans(first,"192.168.255.255")
-            return (False,v_list,None)
-
-        return aggiungi,[],None
-                    
-    class GetVLan(object):
-        def __init__(self):
-            self.vlans={}
-
-        def add_net(self,vlan):
-            self.vlans[vlan.net]=vlan
-            return vlan.net
-
-        def __call__(self,ip):
-            p3,p2,p1,p0=map(int,ip.split("."))
-            ip_obj=Ip(p3,p2,p1,p0)
-            vlan_keys=self.vlans.keys()
-            c_list=filter(lambda x: x<=ip_obj,vlan_keys)
-            if not c_list:
-                vlan=VLan(Ip(p3,p2,p1,0),netmask=24)
-                key=self.add_net(vlan)
-                return key,vlan
-            candidate_key=max(c_list)
-            if ip_obj==candidate_key:
-                return candidate_key,self.vlans[candidate_key]
-            if self.vlans[candidate_key].contains(ip_obj):
-                return candidate_key,self.vlans[candidate_key]
-            vlan=VLan(Ip(p3,p2,p1,0),netmask=24)
-            key=self.add_net(vlan)
-            return key,vlan
+        self.vlan_manager=vlan_manager
             
     def paginate(self):
-        v_net_list=[]
-        for vlan in self.vlan_list:
-            v_net_list.append(VLan(vlan["net"],netmask=int(vlan["netmask"]),obj=vlan))
-        v_net_list.sort()
-        t_net_list=[]
-        new_first=Ip(10,0,0,0)
-        aggiungi=True
-        for vnet in v_net_list:
-            aggiungi,v_list,new_first=self._add_vlans(aggiungi,new_first,vnet)
-            t_net_list+=v_list
-            t_net_list.append(vnet)
-            
-        res_paginated=[]
-        n=0
-        L=None
-        current_net=""
-        no_net=PaginationListByIp(self,"no net",-1)
         net_list={}
-        get_net_key=self.GetVLan()
 
-        for vlan_obj in t_net_list:
-            print "%15.15s %15.15s %d" % (str(vlan_obj.net),str(vlan_obj.last),vlan_obj.netmask)
-            vlan=vlan_obj.obj
-            key=get_net_key.add_net(vlan_obj)
-            if vlan:
-                net_list[key]=PaginationListByIp(self,vlan["net"],vlan["netmask"],
-                                                 vlan_id=vlan["vlan_id"],
-                                                 vlan_desc={ "desc": vlan["vlan_desc"],
-                                                             "dubbio": vlan["vlan_dubbio"],
-                                                             "competenza": vlan["vlan_competenza"],
-                                                             "location": vlan["vlan_location"],
-                                                             "address": vlan["vlan_address"],
-                                                             "note": vlan["vlan_note"],
-                                                             "tabella": vlan["vlan_tabella"],
-                                                             },
-                                                 vlan_net=vlan["net"],
-                                                 vlan_netmask=vlan["netmask"])
-            else:
-                net_list[key]=PaginationListByIp(self,str(vlan_obj.net),vlan_obj.netmask)
+        for vlan in self.vlan_manager.all_vlans():
+            print "%15.15s %15.15s %d" % (str(vlan.net),str(vlan.last),vlan.netmask)
+            net_list[vlan]=PaginationListByIp(self,vlan)
+
+        no_net=PaginationListByIp(self,dns_tcpip.VirtualVLan("no net",0))
 
         for r in self.res_list:
             t=r.ip.split(".")
             if len(t)!=4: 
                 no_net.append(r)
                 continue
-            key,vlan=get_net_key(r.ip)
-            if not net_list.has_key(key):
-                net_list[key]=PaginationListByIp(self,str(vlan.net),vlan.netmask)
-            net_list[key].append(r)
+            vlan=self.vlan_manager(r.ip)
+            if not net_list.has_key(vlan):
+                net_list[vlan]=PaginationListByIp(self,vlan)
+            net_list[vlan].append(r)
+
         all_pages=net_list.values()
-
-        private_pages=[]
-        public_pages=[]
-
-        private_pages=filter(lambda x: not x.public,all_pages)
         public_pages=filter(lambda x: x.public,all_pages)
+        res_paginated=filter(lambda x: not x.public,all_pages)
 
-        res_paginated=private_pages
-
-        sparse_public=PaginationListByIp(self,"0.0.0.0",0)
-
+        sparse_public=PaginationListByIp(self,dns_tcpip.VirtualVLan("sparse public addresses",1,public=True))
         for page in public_pages:
             if page.fixed: 
                 res_paginated.append(page)
@@ -991,15 +775,15 @@ class PaginationByIp(Pagination):
             for r in page:
                 sparse_public.append(r)
 
-        res_paginated.sort()
-
         if sparse_public:
             res_paginated.append(sparse_public)
         if no_net:
             res_paginated.append(no_net)
+
+        res_paginated.sort()
             
         return res_paginated
-        #return self._aggregate_net(res_paginated)
+
 
     def _aggregate_net(self,res_paginated):
 
@@ -1112,16 +896,20 @@ class PaginationByIp(Pagination):
         return self._resplit(lato_a,net_a,netmask)+self._resplit(lato_b,net_b,netmask)
 
     def header_table(self):
-        S="<thead><tr>"
-        for cspan,lab in [ (9,""), (1,"quantità"), (7,"first"), (7,"last"),(2,"vlan"),(2,"indirizzo"),(2,"competenza"),(1,"note"),(1,"tabella") ]:
-            if cspan>1:
-                S+='<th colspan="'+str(cspan)+'">'+lab+"</th>"
-            else:
-                S+="<th>"+lab+"</th>"
-        S+="</tr></thead>\n"
-        return S
+        tab=Table(1,32,tbody="thead")
+        tab.set_all_th()
+        c=0
+        for cspan,lab in [ (9,u""), 
+                           (1,u"quantità"), (7,u"first"), (7,u"last"),
+                           (2,u"vlan"),(2,u"indirizzo"),(2,u"competenza"),(1,u"note"),(1,u"tabella") ]:
+            tab.set_val(0,c,lab)
+            tab.set_span(0,c,colspan=cspan)
+            c+=cspan
+        return tab
 
 class PaginationListByName(PaginationList):
+    template_row_name="includes/pagination_list_byname_row.html"
+
     def __init__(self,pagination,net,group_len=-1,group_seq=-1):
         PaginationList.__init__(self,pagination)
         self.net=net
@@ -1181,7 +969,7 @@ class PaginationListByName(PaginationList):
         return self.__gt__(other)
 
     ### header della tabella della pagina specifica
-    def table_header(self):
+    def table_header_ctx(self):
         num_rows,num_cols=self.get_header_size(2,6)
         tab=Table(num_rows,num_cols,tbody="thead")
         tab.set_all_th()
@@ -1198,10 +986,312 @@ class PaginationListByName(PaginationList):
         tab.set_val(num_rows-1,5,"IN PTR")
 
         self.set_labelers_header(tab,6,num_rows)
-        return str(tab)
+        return tab
+
+    # def table_header(self):
+    #     tab=self.table_header_ctx()
+    #     return str(tab)
+
+    # ### riga della tabella della pagina specifica (name)
+    # def html_row(self,row):
+
+    #     ip_dict={}
+    #     if row.record_type in ["A"]:
+    #         for ip,vlist in row.res.items():
+    #             if not ip_dict.has_key(ip):
+    #                 ip_dict[ip]={ "ptr": [], "a": [], "cname": [] }
+    #             for view_set,record in vlist:
+    #                 ip_dict[ip]["a"].append(view_set)
+    #         for view_set,res_ip in row.res_ip_list:
+    #             key=res_ip.ip
+    #             if not res_ip.res.has_key(row.name): continue
+    #             if not ip_dict.has_key(key):
+    #                 ip_dict[key]={ "ptr": [], "a": [], "cname": [] }
+    #             ip_dict[key]["ptr"].append(view_set)
+    #     elif row.record_type in ["PTR"]:
+    #         for view_set,res_ip in row.res_ip_list:
+    #             key=res_ip.ip
+    #             if not ip_dict.has_key(key):
+    #                 ip_dict[key]={ "ptr": [], "a": [], "cname": [] }
+    #             ip_dict[key]["ptr"].append(view_set)
+    #     else:
+    #         for cname_view_set,res_aname in row.res_name_list:
+    #             for ip,vlist in res_aname.res.items():
+    #                 for view_set,record in vlist:
+    #                     if cname_view_set!=view_set: continue
+    #                     if not ip_dict.has_key(ip):
+    #                         ip_dict[ip]={ "ptr": [], "a": [], "cname": [] }
+    #                     ip_dict[ip]["cname"].append(view_set)
+    #             for view_set,res_ip in row.res_ip_list:
+    #                 key=res_ip.ip
+    #                 if not res_ip.res.has_key(row.name): continue
+    #                 if not ip_dict.has_key(key):
+    #                     ip_dict[key]={ "ptr": [], "a": [], "cname": [] }
+    #                 ip_dict[key]["ptr"].append(view_set)
+
+    #     L=0
+    #     for ip,desc in ip_dict.items():
+    #         L+=max(len(desc["ptr"]),len(desc["a"]),len(desc["cname"]))
+    #     last=L
+
+    #     open_label='<a name="res'+str(row.id)+'"></a>'
+    #     for lab,other,icon in [ ("open","close","right"),("close","open","down") ]:
+    #         open_label+='<a href="" class="'+lab+'" '
+    #         open_label+=' id="'+lab+str(row.id)+'"'
+    #         open_label+=' data-'+other+'="#'+other+str(row.id)+'"'
+    #         open_label+=' data-target="#row'+str(row.id)+'">'
+    #         open_label+='&nbsp;<i class="fa fa-caret-'+icon+'"></i>&nbsp;</a>'
+
+    #     num_cols,style=self.get_data_params(row,6,[])
+
+    #     tab=Table(L+1,num_cols,style=style)
+    #     tab.set_val(0,0,open_label+str(row.name))
+    #     tab.set_span(0,0,rowspan=L)
+    #     tab.set_style(0,0,th=True,style="left")
+
+    #     self.set_labelers_data(tab,row,0,6,L)
+
+    #     ip_list=ip_dict.keys()
+    #     ip_list.sort(cmp=ip_cmp)
+
+    #     r=0
+    #     for ip in ip_list:
+    #         desc=ip_dict[ip]
+    #         L=max(len(desc["ptr"]),len(desc["a"]),len(desc["cname"]))
+    #         tab.set_val(r,1,self.res_link(ip))
+    #         #tab.set_val(r,2,self.pagination.ping_map(ip))
+    #         tab.set_val(r,2,"")
+    #         tab.set_span(r,1,rowspan=L)
+    #         tab.set_style(r,1,th=True,style="left")
+    #         tab.set_span(r,2,rowspan=L)
+    #         tab.set_style(r,2,th=True,style="left")
+
+    #         for ind,label in [ (3,"a"), (4,"cname"), (5,"ptr") ]:
+    #             rb=r
+    #             for view_set in desc[label]:
+    #                 tab.set_val(rb,ind,view_set.cell())
+    #                 rb+=1
+    #         r+=L
+
+    #     tab.set_span(last,1,colspan=num_cols-1)
+    #     tab.set_style(last,0,th=True,style="left")
+    #     tab.set_style(last,1,style="tab_cell_detail")
+    #     tab.set_row_style(last,"start_hidden no_hover")
+    #     tab.set_row_id(last,"row"+str(row.id))
+
+    #     S="<h1>"+str(row.name)+"</h1>"
+
+    #     if row.res_ip_list:
+    #         S+="<h2>IN PTR</h2>"
+    #         S+="<table>"
+    #         S+="<thead><tr class='no-hover'>"
+    #         S+="<th>IP</th><th>views</th><th>record</th>"
+    #         S+="</tr></thead>"
+
+    #         for view_set,res_ip in row.res_ip_list:
+    #             for name,record_list in res_ip.res.items():
+    #                 if name!=row.name: continue
+    #                 S+='<tbody><tr><td rowspan="'+str(len(record_list))+'">'+self.res_link(res_ip.ip)+"</td>"
+    #                 primo=True
+    #                 for view_set,record in record_list:
+    #                     if primo: primo=False
+    #                     else: S+="<tr>"
+    #                     S+="<td>"+view_set.cell()+"</td>"
+    #                     S+="<td>"+self.record_link(record)+"</td>"
+    #                     S+='</tr>'
+    #                 S+="</tbody>"
+    #         S+="</table>"
+
+    #     if row.record_type in ["PTR"]:
+    #         tab.set_val(last,1,S)
+    #         return str(tab)
+
+    #     if row.record_type in ["A"]:
+    #         S+="<h2>IN A</h2>"
+    #         S+="<table>"
+    #         S+="<thead><tr class='no-hover'>"
+    #         S+="<tr><th>IP</th><th>views</th><th>record</th>"
+    #         S+="</tr></thead>"
+
+    #         for ip,record_list in row.res.items():
+    #             S+='<tbody><tr><td rowspan="'+str(len(record_list))+'">'+self.res_link(ip)+"</td>"
+    #             primo=True
+    #             for view_set,record in record_list:
+    #                 if primo: primo=False
+    #                 else: S+="<tr>"
+    #                 S+="<td>"+view_set.cell()+"</td>"
+    #                 S+="<td>"+self.record_link(record)+"</td>"
+    #                 S+='</tr>'
+    #             S+="</tbody>"
+    #         S+="</table>\n"
+    #         tab.set_val(last,1,S)
+
+    #         return str(tab)
+
+    #     S+="<h2>IN CNAME</h2>"
+    #     S+="<table>"
+    #     S+="<thead><tr class='no-hover'>"
+    #     S+="<tr><th>alias</th><th>views</th><th>record</th>"
+    #     S+="</tr></thead>"
+
+    #     for name,record_list in row.res.items():
+    #         S+='<tbody><tr><td rowspan="'+str(len(record_list))+'">'+self.res_link(name)+"</td>"
+    #         primo=True
+    #         for view_set,record in record_list:
+    #             if primo: primo=False
+    #             else: S+="<tr>"
+    #             S+="<td>"+view_set.cell()+"</td>"
+    #             S+="<td>"+self.record_link(record)+"</td>"
+    #             S+='</tr>'
+    #         S+="</tbody>"
+
+    #     S+="</table>\n"
+
+    #     S+="<h2>IN A</h2>"
+    #     S+="<table>"
+    #     S+="<thead><tr class='no-hover'>"
+    #     S+="<tr><th>IP</th><th>views</th><th>record</th>"
+    #     S+="</tr></thead>"
+
+
+
+    #     primo=True
+    #     for c_view_set,res_aname in row.res_name_list:
+    #         S+='<tbody>'
+    #         for ip,vlist in res_aname.res.items():
+    #             S+='<tr><td rowspan="'+str(len(vlist))+'">'+self.res_link(ip)+"</td>"
+    #             primo=True
+    #             for view_set,record in record_list:
+    #                 if view_set!=c_view_set: continue
+    #                 if primo: primo=False
+    #                 else: S+="<tr>"
+    #                 S+="<td>"+view_set.cell()+"</td>"
+    #                 S+="<td>"+self.record_link(record)+"</td>"
+    #                 S+='</tr>'
+    #         S+='</tbody>'
+
+    #     S+="</table>\n"
+    #     tab.set_val(last,1,S)
+
+    #     return str(tab)
+
+    #     # ### QUI
+
+    #     # L=0
+    #     # for key,desc in row.res.items():
+    #     #     L+=len(desc)
+    #     # if not L: return ""
+
+    #     # t_rowspan=L
+    #     # rowspan=L
+    #     # if row.record_type=="A":
+    #     #     for view_set,row_ip in row.res_ip_list:
+    #     #         xL=0
+    #     #         for key,desc in row_ip.res.items():
+    #     #             if key!=row.name: continue
+    #     #             xL+=len(desc)
+    #     #         rowspan+=xL
+    #     # elif row.record_type=="CNAME":
+    #     #     rowspan=0
+    #     #     for view_set,row_name in row.res_name_list:
+    #     #         xL=0
+    #     #         for key,desc in row_name.res.items():
+    #     #             xL+=len(desc)
+    #     #         rowspan+=xL
+    #     #     rowspan=max(L,rowspan)
+    #     #     t_rowspan=rowspan
+    #     # a_name='<a name="res'+str(row.id)+'"></a>'
+
+    #     # num_cols,style=self.get_data_params(row,8,[])
+
+    #     # tab=Table(rowspan,num_cols,style=style)
+
+    #     # self.set_labelers_data(tab,row,0,8,rowspan)
+
+    #     # tab.set_style(0,0,th=True)
+    #     # tab.set_span(0,0,rowspan=rowspan)
+    #     # tab.set_val(0,0,a_name+row.name)
+
+    #     # tab.set_span(0,1,rowspan=t_rowspan)
+    #     # tab.set_val(0,1,"IN "+row.record_type)
+
+    #     # if row.record_type in [ "PTR","A" ]:
+    #     #     r=0
+    #     #     for key,desc in row.res.items():
+    #     #         L=len(desc)
+    #     #         tab.set_val(r,2,self.res_link(key))
+    #     #         tab.set_span(r,2,rowspan=L)
+    #     #         for view_set,record in desc:
+    #     #             tab.set_val(r,3,view_set.cell())
+    #     #             tab.set_val(r,4,self.record_link(record))
+    #     #             r+=1
+
+    #     #     if row.record_type=="PTR": return str(tab)
+
+    #     #     if rowspan==t_rowspan: return str(tab)
+    #     #     tab.set_val(r,1,"IN PTR")
+    #     #     tab.set_span(r,1,rowspan-t_rowspan)
+    #     #     for view_set,row_ip in row.res_ip_list:
+    #     #         xL=0
+    #     #         xr=r
+    #     #         for key,desc in row_ip.res.items():
+    #     #             if key!=row.name: continue
+    #     #             L=len(desc)
+    #     #             xL+=L
+    #     #             tab.set_val(r,6,key)
+    #     #             tab.set_span(r,6,rowspan=L)
+    #     #             for iview_set,record in desc:
+    #     #                 tab.set_val(r,4,self.record_link(record))
+    #     #                 tab.set_val(r,5,iview_set.cell())
+    #     #                 r+=1
+    #     #         if xL:
+    #     #             tab.set_val(xr,2,self.res_link(row_ip.ip))
+    #     #             tab.set_span(xr,2,rowspan=xL)
+    #     #             tab.set_val(xr,3,view_set.cell())
+    #     #             tab.set_span(xr,3,rowspan=xL)
+    #     #     return str(tab)
+
+    #     # ## cname
+    #     # r=0
+    #     # for key,desc in row.res.items():
+    #     #     L=len(desc)
+    #     #     tab.set_val(r,5,self.res_link(key))
+    #     #     tab.set_span(r,5,rowspan=L)
+    #     #     for view_set,record in desc:
+    #     #         tab.set_val(r,3,view_set.cell())
+    #     #         tab.set_val(r,4,self.record_link(record))
+    #     #         r+=1
+
+    #     # r=0
+    #     # for view_set,row_name in row.res_name_list:
+    #     #     for key,desc in row_name.res.items():
+    #     #         L=len(desc)
+    #     #         tab.set_val(r,2,self.res_link(key))
+    #     #         tab.set_span(r,2,rowspan=L)
+    #     #         for view_set,record in desc:
+    #     #             tab.set_val(r,6,view_set.cell())
+    #     #             tab.set_val(r,7,self.record_link(record))
+    #     #             r+=1
+
+    #     # # elif row.record_type=="CNAME":
+    #     # #     r=0
+    #     # #     for view_set,res_name in row.res_name_list:
+    #     # #         tab.set_val(r,6,view_set.cell())
+    #     # #         tab.set_val(r,7,str(res_name))
+    #     # #         tab.set_span(r,7,colspan=3)
+    #     # #         r+=1
+    #     # # else:
+    #     # #     r=0
+    #     # #     for view_set,res_ip in row.res_ip_list:
+    #     # #         tab.set_val(r,6,view_set.cell())
+    #     # #         tab.set_val(r,7,str(res_ip))
+    #     # #         tab.set_span(r,7,colspan=3)
+    #     # #         r+=1
+    #     # return str(tab)
+
 
     ### riga della tabella della pagina specifica (name)
-    def html_row(self,row):
+    def html_row_ctx(self,row):
 
         ip_dict={}
         if row.record_type in ["A"]:
@@ -1237,23 +1327,23 @@ class PaginationListByName(PaginationList):
                         ip_dict[key]={ "ptr": [], "a": [], "cname": [] }
                     ip_dict[key]["ptr"].append(view_set)
 
+        num_cols,style=self.get_data_params(row,6,[])
+
+        if not ip_dict:
+            tab=Table(1,num_cols,style="yellow")
+            tab.set_val(0,0,str(row.name))
+            tab.set_style(0,0,th=True,style="left")
+            tab.set_span(0,1,colspan=num_cols-1)
+            tab.set_val(0,1,"no record")
+            return { "main": tab, "hidden": {} }
+
         L=0
         for ip,desc in ip_dict.items():
             L+=max(len(desc["ptr"]),len(desc["a"]),len(desc["cname"]))
-        last=L
 
-        open_label='<a name="res'+str(row.id)+'"></a>'
-        for lab,other,icon in [ ("open","close","right"),("close","open","down") ]:
-            open_label+='<a href="" class="'+lab+'" '
-            open_label+=' id="'+lab+str(row.id)+'"'
-            open_label+=' data-'+other+'="#'+other+str(row.id)+'"'
-            open_label+=' data-target="#row'+str(row.id)+'">'
-            open_label+='&nbsp;<i class="fa fa-caret-'+icon+'"></i>&nbsp;</a>'
+        tab=Table(L,num_cols,style=style)
 
-        num_cols,style=self.get_data_params(row,6,[])
-
-        tab=Table(L+1,num_cols,style=style)
-        tab.set_val(0,0,open_label+str(row.name))
+        tab.set_open(0,0,"res"+str(row.id),str(row.id),"row"+str(row.id),str(row.name))
         tab.set_span(0,0,rowspan=L)
         tab.set_style(0,0,th=True,style="left")
 
@@ -1267,7 +1357,7 @@ class PaginationListByName(PaginationList):
             desc=ip_dict[ip]
             L=max(len(desc["ptr"]),len(desc["a"]),len(desc["cname"]))
             tab.set_val(r,1,self.res_link(ip))
-            tab.set_val(r,2,self.pagination.ping_map(ip))
+            tab.set_val(r,2,"")
             tab.set_span(r,1,rowspan=L)
             tab.set_style(r,1,th=True,style="left")
             tab.set_span(r,2,rowspan=L)
@@ -1280,245 +1370,148 @@ class PaginationListByName(PaginationList):
                     rb+=1
             r+=L
 
-        tab.set_span(last,1,colspan=num_cols-1)
-        tab.set_style(last,0,th=True,style="left")
-        tab.set_style(last,1,style="tab_cell_detail")
-        tab.set_row_style(last,"start_hidden no_hover")
-        tab.set_row_id(last,"row"+str(row.id))
-
-        S="<h1>"+str(row.name)+"</h1>"
+        ### riga nascosta
+        covered={
+            "title": str(row.name),
+            "sub_tabs": [],
+            "dom_id": "row"+str(row.id)
+        }
 
         if row.res_ip_list:
-            S+="<h2>IN PTR</h2>"
-            S+="<table>"
-            S+="<thead><tr class='no-hover'>"
-            S+="<th>IP</th><th>views</th><th>record</th>"
-            S+="</tr></thead>"
+            sub_title="IN PTR"
+            sub_rows=[]
+
+            sub_tab=Table(1,3,tbody="thead")
+            sub_tab.set_all_th()
+            sub_tab.set_val(0,0,"ip")
+            sub_tab.set_val(0,1,"views")
+            sub_tab.set_val(0,2,"record")
+            sub_tab.set_row_style(0,"no-hover")
+
+            sub_rows.append(sub_tab)
+
 
             for view_set,res_ip in row.res_ip_list:
                 for name,record_list in res_ip.res.items():
                     if name!=row.name: continue
-                    S+='<tbody><tr><td rowspan="'+str(len(record_list))+'">'+self.res_link(res_ip.ip)+"</td>"
-                    primo=True
+                    sub_tab=Table(len(record_list),3)
+                    sub_tab.set_span(0,0,rowspan=len(record_list))
+                    sub_tab.set_val(0,0,self.res_link(res_ip.ip))
+                    r=0
                     for view_set,record in record_list:
-                        if primo: primo=False
-                        else: S+="<tr>"
-                        S+="<td>"+view_set.cell()+"</td>"
-                        S+="<td>"+self.record_link(record)+"</td>"
-                        S+='</tr>'
-                    S+="</tbody>"
-            S+="</table>"
+                        sub_tab.set_val(r,1,view_set.cell())
+                        sub_tab.set_val(r,2,self.record_link(record))
+                        r+=1
+                    sub_rows.append(sub_tab)
 
+            covered["sub_tabs"].append( (sub_title,sub_rows) )
+        
         if row.record_type in ["PTR"]:
-            tab.set_val(last,1,S)
-            return str(tab)
+            return {"main": tab, "hidden": covered }
 
         if row.record_type in ["A"]:
-            S+="<h2>IN A</h2>"
-            S+="<table>"
-            S+="<thead><tr class='no-hover'>"
-            S+="<tr><th>IP</th><th>views</th><th>record</th>"
-            S+="</tr></thead>"
+            sub_title="IN A"
+            sub_rows=[]
+
+            sub_tab=Table(1,3,tbody="thead")
+            sub_tab.set_all_th()
+            sub_tab.set_val(0,0,"IP")
+            sub_tab.set_val(0,1,"views")
+            sub_tab.set_val(0,2,"record")
+            sub_tab.set_row_style(0,"no-hover")
+
+            sub_rows.append(sub_tab)
 
             for ip,record_list in row.res.items():
-                S+='<tbody><tr><td rowspan="'+str(len(record_list))+'">'+self.res_link(ip)+"</td>"
-                primo=True
+                sub_tab=Table(len(record_list),3)
+                sub_tab.set_span(0,0,rowspan=len(record_list))
+                sub_tab.set_val(0,0,self.res_link(ip))
+                r=0
                 for view_set,record in record_list:
-                    if primo: primo=False
-                    else: S+="<tr>"
-                    S+="<td>"+view_set.cell()+"</td>"
-                    S+="<td>"+self.record_link(record)+"</td>"
-                    S+='</tr>'
-                S+="</tbody>"
-            S+="</table>\n"
-            tab.set_val(last,1,S)
+                    sub_tab.set_val(r,1,view_set.cell())
+                    sub_tab.set_val(r,2,self.record_link(record))
+                    r+=1
+                sub_rows.append(sub_tab)
+            covered["sub_tabs"].append( (sub_title,sub_rows) )
 
-            return str(tab)
+            return { "main": tab, "hidden": covered }
 
-        S+="<h2>IN CNAME</h2>"
-        S+="<table>"
-        S+="<thead><tr class='no-hover'>"
-        S+="<tr><th>alias</th><th>views</th><th>record</th>"
-        S+="</tr></thead>"
+        sub_title="IN CNAME"
+        sub_rows=[]
+
+        sub_tab=Table(1,3,tbody="thead")
+        sub_tab.set_all_th()
+        sub_tab.set_val(0,0,"alias")
+        sub_tab.set_val(0,1,"views")
+        sub_tab.set_val(0,2,"record")
+        sub_tab.set_row_style(0,"no-hover")
+
+        sub_rows.append(sub_tab)
 
         for name,record_list in row.res.items():
-            S+='<tbody><tr><td rowspan="'+str(len(record_list))+'">'+self.res_link(name)+"</td>"
-            primo=True
+            sub_tab=Table(len(record_list),3)
+            sub_tab.set_span(0,0,rowspan=len(record_list))
+            sub_tab.set_val(0,0,self.res_link(name))
+            r=0
             for view_set,record in record_list:
-                if primo: primo=False
-                else: S+="<tr>"
-                S+="<td>"+view_set.cell()+"</td>"
-                S+="<td>"+self.record_link(record)+"</td>"
-                S+='</tr>'
-            S+="</tbody>"
+                sub_tab.set_val(r,1,view_set.cell())
+                sub_tab.set_val(r,2,self.record_link(record))
+                r+=1
 
-        S+="</table>\n"
+        covered["sub_tabs"].append( (sub_title,sub_rows) )
 
-        S+="<h2>IN A</h2>"
-        S+="<table>"
-        S+="<thead><tr class='no-hover'>"
-        S+="<tr><th>IP</th><th>views</th><th>record</th>"
-        S+="</tr></thead>"
+        sub_title="IN A"
+        sub_rows=[]
 
+        sub_tab=Table(1,3,tbody="thead")
+        sub_tab.set_all_th()
+        sub_tab.set_val(0,0,"IP")
+        sub_tab.set_val(0,1,"views")
+        sub_tab.set_val(0,2,"record")
+        sub_tab.set_row_style(0,"no-hover")
+        
+        sub_rows.append(sub_tab)
 
-
-        primo=True
         for c_view_set,res_aname in row.res_name_list:
-            S+='<tbody>'
             for ip,vlist in res_aname.res.items():
-                S+='<tr><td rowspan="'+str(len(vlist))+'">'+self.res_link(ip)+"</td>"
-                primo=True
+                sub_tab=Table(len(vlist),3)
+                sub_tab.set_span(0,0,rowspan=len(vlist))
+                sub_tab.set_val(0,0,self.res_link(ip))
+                r=0
                 for view_set,record in record_list:
                     if view_set!=c_view_set: continue
-                    if primo: primo=False
-                    else: S+="<tr>"
-                    S+="<td>"+view_set.cell()+"</td>"
-                    S+="<td>"+self.record_link(record)+"</td>"
-                    S+='</tr>'
-            S+='</tbody>'
+                    sub_tab.set_val(r,1,view_set.cell())
+                    sub_tab.set_val(r,2,self.record_link(record))
+                    r+=1
+                sub_rows.append(sub_tab)
 
-        S+="</table>\n"
-        tab.set_val(last,1,S)
+        covered["sub_tabs"].append( (sub_title,sub_rows) )
 
-        return str(tab)
-
-        # ### QUI
-
-        # L=0
-        # for key,desc in row.res.items():
-        #     L+=len(desc)
-        # if not L: return ""
-
-        # t_rowspan=L
-        # rowspan=L
-        # if row.record_type=="A":
-        #     for view_set,row_ip in row.res_ip_list:
-        #         xL=0
-        #         for key,desc in row_ip.res.items():
-        #             if key!=row.name: continue
-        #             xL+=len(desc)
-        #         rowspan+=xL
-        # elif row.record_type=="CNAME":
-        #     rowspan=0
-        #     for view_set,row_name in row.res_name_list:
-        #         xL=0
-        #         for key,desc in row_name.res.items():
-        #             xL+=len(desc)
-        #         rowspan+=xL
-        #     rowspan=max(L,rowspan)
-        #     t_rowspan=rowspan
-        # a_name='<a name="res'+str(row.id)+'"></a>'
-
-        # num_cols,style=self.get_data_params(row,8,[])
-
-        # tab=Table(rowspan,num_cols,style=style)
-
-        # self.set_labelers_data(tab,row,0,8,rowspan)
-
-        # tab.set_style(0,0,th=True)
-        # tab.set_span(0,0,rowspan=rowspan)
-        # tab.set_val(0,0,a_name+row.name)
-
-        # tab.set_span(0,1,rowspan=t_rowspan)
-        # tab.set_val(0,1,"IN "+row.record_type)
-
-        # if row.record_type in [ "PTR","A" ]:
-        #     r=0
-        #     for key,desc in row.res.items():
-        #         L=len(desc)
-        #         tab.set_val(r,2,self.res_link(key))
-        #         tab.set_span(r,2,rowspan=L)
-        #         for view_set,record in desc:
-        #             tab.set_val(r,3,view_set.cell())
-        #             tab.set_val(r,4,self.record_link(record))
-        #             r+=1
-
-        #     if row.record_type=="PTR": return str(tab)
-
-        #     if rowspan==t_rowspan: return str(tab)
-        #     tab.set_val(r,1,"IN PTR")
-        #     tab.set_span(r,1,rowspan-t_rowspan)
-        #     for view_set,row_ip in row.res_ip_list:
-        #         xL=0
-        #         xr=r
-        #         for key,desc in row_ip.res.items():
-        #             if key!=row.name: continue
-        #             L=len(desc)
-        #             xL+=L
-        #             tab.set_val(r,6,key)
-        #             tab.set_span(r,6,rowspan=L)
-        #             for iview_set,record in desc:
-        #                 tab.set_val(r,4,self.record_link(record))
-        #                 tab.set_val(r,5,iview_set.cell())
-        #                 r+=1
-        #         if xL:
-        #             tab.set_val(xr,2,self.res_link(row_ip.ip))
-        #             tab.set_span(xr,2,rowspan=xL)
-        #             tab.set_val(xr,3,view_set.cell())
-        #             tab.set_span(xr,3,rowspan=xL)
-        #     return str(tab)
-
-        # ## cname
-        # r=0
-        # for key,desc in row.res.items():
-        #     L=len(desc)
-        #     tab.set_val(r,5,self.res_link(key))
-        #     tab.set_span(r,5,rowspan=L)
-        #     for view_set,record in desc:
-        #         tab.set_val(r,3,view_set.cell())
-        #         tab.set_val(r,4,self.record_link(record))
-        #         r+=1
-
-        # r=0
-        # for view_set,row_name in row.res_name_list:
-        #     for key,desc in row_name.res.items():
-        #         L=len(desc)
-        #         tab.set_val(r,2,self.res_link(key))
-        #         tab.set_span(r,2,rowspan=L)
-        #         for view_set,record in desc:
-        #             tab.set_val(r,6,view_set.cell())
-        #             tab.set_val(r,7,self.record_link(record))
-        #             r+=1
-
-        # # elif row.record_type=="CNAME":
-        # #     r=0
-        # #     for view_set,res_name in row.res_name_list:
-        # #         tab.set_val(r,6,view_set.cell())
-        # #         tab.set_val(r,7,str(res_name))
-        # #         tab.set_span(r,7,colspan=3)
-        # #         r+=1
-        # # else:
-        # #     r=0
-        # #     for view_set,res_ip in row.res_ip_list:
-        # #         tab.set_val(r,6,view_set.cell())
-        # #         tab.set_val(r,7,str(res_ip))
-        # #         tab.set_span(r,7,colspan=3)
-        # #         r+=1
-        # return str(tab)
+        return {"main": tab,"hidden": covered }
 
     def toc_range_cells(self):
-        r=""
+        h1=CellSequence(2)
         if self.first():
-            r+="<td>"+self.first().name+"</td>"
+            h1.set_val(str(self.first().name),0)
         if self.last():
-            r+="<td>"+self.last().name+"</td>"
-        return r
+            h1.set_val(str(self.last().name),1)
+        return h1
 
     def toc_title_cells(self):
+        h1=CellSequence(1)
         L=len(self.net.strip(".").split("."))
         if L<=1:
-            return "<td>"+str(self)+"</td>"
-        prefix=''.join(map(lambda x: "&nbsp;&nbsp;",range(0,L-1)))
-        return "<td>"+prefix+str(self)+"</td>"
-        
+            h1.set_val(unicode_convert(self),0)
+            return h1
+        prefix=u''.join(map(lambda x: u"&nbsp;&nbsp;",range(0,L-1)))
+        h1.set_val(prefix+unicode_convert(self),0)
+        return h1
 
 class PaginationByName(Pagination):
     pagination_list_class = PaginationListByName
 
-    def __init__(self,res_list,object_per_page,url_resolver,vlan_list,ping_map):
+    def __init__(self,res_list,object_per_page,url_resolver):
         Pagination.__init__(self,res_list,object_per_page,url_resolver)
-        self.vlan_list=vlan_list
-        self.ping_map=ping_map
 
     def paginate(self):
         res_paginated=[]
@@ -1613,11 +1606,21 @@ class FileWrapper(object):
     def close(self):
         self.fd.close()
 
+################################################################################
+################################################################################
+###
+### View
+###
+################################################################################
+################################################################################
+
+
 class GlobalView(object):
     sub_directories=[]
 
-    def __init__(self,dirout):
+    def __init__(self,database,dirout):
         self.dirout=dirout
+        self.database=database
 
     def _make_output_directories(self):
         for lab in self.sub_directories:
@@ -1626,46 +1629,81 @@ class GlobalView(object):
             except os.error, e:
                 pass
 
-    def make_files(self,dns_db):
+    def _make_files(self):
         pass
 
-    def output(self,dns_db):
+    def output(self):
         self._make_output_directories()
-        self.make_files(dns_db)
+        self._make_files()
 
-################################################################################
-################################################################################
-###
-### Html
-###
-################################################################################
-################################################################################
+##########################################################
+#### Html
 
-class HtmlPage(FileWrapper):
-    def __init__(self,fname,title,out_dir,context,static_root,menus,logo_title,toc_title=""):
-        FileWrapper.__init__(self,out_dir+"/"+fname)
-        self.title=title
+class ContextManager(object):
+    def __init__(self,out_dir,root,static_root,theme,menus,logo_title):
+        self.root=root
         self.static_root=static_root
+        self.theme=theme
         self.menus=menus
         self.out_dir=out_dir
-        self.context=context
-        self.url=context+"/"+fname
         self.logo_title=logo_title
+
+        self.theme_dir=dns_config.THEMES_DIR+"/"+self.theme+"/templates"
+        self.jinja_env=jinja2.Environment(loader=jinja2.FileSystemLoader(self.theme_dir),
+                                          trim_blocks=True,lstrip_blocks=True)
+
+        self.menus["single_db"]=[ (self.root+"/index.html","Indice"),
+                                  (self.root+"/zones-index.html","Zone"),
+                                  (self.root+"/ips-index.html","IP"),
+                                  (self.root+"/names-index.html","Nomi"),
+                                  (self.root+"/NS-index.html","NS"),
+                                  (self.root+"/MX-index.html","MX"),
+                                  (self.root+"/SRV-index.html","SRV"),
+                                  (self.root+"/AFSDB-index.html","AFSDB"),
+                                  (self.root+"/TXT-index.html","TXT"),
+                                  (self.root+"/SPF-index.html","SPF") ]
+
+
+    def _get_template(self,template_name):
+        return self.jinja_env.get_template(template_name)
+
+    def render(self,template,context_dict={}):
+        template=self._get_template(template)
+        context_dict["context_root"]=self.root
+        context_dict["static_root"]=self.static_root
+        context_dict["logo_title"]=self.logo_title
+        for k,val in dns_config.HTML_BASE_VAR.items():
+            context_dict[k.lower()]=val
+        context_dict["menu_main"]=self.menus["main"]
+        context_dict["menu_db"]=self.menus["single_db"]
+        T=template.render(**context_dict)
+        T=T.encode('utf-8')
+        return T
+        
+
+class HtmlPage(FileWrapper):
+    def __init__(self,fname,title,context_manager,toc_title=u""):
+        self.context_manager=context_manager
+        FileWrapper.__init__(self,self.context_manager.out_dir+"/"+fname)
+        self.title=title
+        self.url=self.context_manager.root+"/"+fname
         self.toc_title=toc_title
-        if not self.toc_title: self.toc_title=self.title
+        if not self.toc_title: 
+            self.toc_title=self.title
 
     def open(self,mode=''):
         FileWrapper.open(self)
-        self.insert_template(TEMPLATES_HTML+"/header.html")
+        self._insert_template(TEMPLATES_HTML+"/header.html")
 
-    def insert_template(self,tname):
+    def _insert_template(self,tname):
         ftempl=open(tname)
         for r in ftempl.readlines():
-            r=r.replace("%%LOGO_TITLE%%",self.logo_title)
             r=r.replace("%%PAGE_TITLE%%",self.title)
-            r=r.replace("%%CONTEXT_ROOT%%",self.context)
-            r=r.replace("%%STATIC_ROOT%%",self.static_root)
-            for k,m_list in self.menus.items():
+
+            r=r.replace("%%CONTEXT_ROOT%%",self.context_manager.root)
+            r=r.replace("%%STATIC_ROOT%%",self.context_manager.static_root)
+            r=r.replace("%%LOGO_TITLE%%",self.context_manager.logo_title)
+            for k,m_list in self.context_manager.menus.items():
                 val=""
                 for url,label in m_list:
                     val+='<a href="'+url+'">'+label+'</a>'
@@ -1675,7 +1713,8 @@ class HtmlPage(FileWrapper):
             self.fd.write(r)
         ftempl.close()
 
-    def script(self): return ""
+    def script(self): 
+        return ""
 
     def close(self):
         s=self.script()
@@ -1683,7 +1722,7 @@ class HtmlPage(FileWrapper):
             self.write("<script>\n")
             self.write(s)
             self.write("\n</script>\n")
-        self.insert_template(TEMPLATES_HTML+"/footer.html")
+        self._insert_template(TEMPLATES_HTML+"/footer.html")
         FileWrapper.close(self)
 
     def new_cell(self,txt,td="td",cl="left",rowspan=1,colspan=1):
@@ -1695,27 +1734,54 @@ class HtmlPage(FileWrapper):
         t+=">"+txt+"</"+td+">"
         return t
 
-class HtmlIndexPage(HtmlPage):
-    def __init__(self,out_dir,context,static_root,menus,logo_title,list_subindexes,toc_title=""):
-        HtmlPage.__init__(self,"index.html","Indice",out_dir,context,static_root,menus,logo_title,toc_title=toc_title)
-        self.list_subindexes=list_subindexes
+class HtmlPage2(FileWrapper):
+    template_name=""
+
+    def __init__(self,fname,title,context_manager,toc_title=u""):
+        self.context_manager=context_manager
+        FileWrapper.__init__(self,self.context_manager.out_dir+"/"+fname)
+        self.title=unicode_convert(title)
+        self.url=self.context_manager.root+"/"+fname
+        self.toc_title=unicode_convert(toc_title)
+        if not self.toc_title: 
+            self.toc_title=self.title
+
+    def _create_context(self):
+        return {}
 
     def create(self):
-        self.open()
-        self.write("<ul>")
-        for page in self.list_subindexes:
-            self.write("<li><a href='"+page.url+"'>"+page.toc_title+"</a></li>")
-        self.write("</ul>")
+        context=self._create_context()
+        context["page_title"]=self.title
+        T=self.context_manager.render(self.template_name,context)
+        self.open(mode='w')
+        self.write(T)
         self.close()
 
+class HtmlIndexPage(HtmlPage2):
+    template_name="index.html"
+
+    def __init__(self,context_manager,list_subindexes,toc_title=u""):
+        HtmlPage2.__init__(self,"index.html","Indice",context_manager,toc_title=toc_title)
+        self.list_subindexes=list_subindexes
+
+    def _create_context(self):
+        return { "page_list": self.list_subindexes }
+
 class HtmlSpecialIndexPage(HtmlPage):
-    def __init__(self,fname,title,out_dir,context,static_root,menus,logo_title,
-                 special="",h_titles=["owner","views","ttl","data"],skip_empty=True,toc_title=""):
-        HtmlPage.__init__(self,fname,title,out_dir,context,static_root,menus,logo_title,toc_title=toc_title)
+    #template_name="special_index.html"
+    def __init__(self,fname,title,context_manager,
+                 special="",h_titles=["owner","views","ttl","data"],skip_empty=True,toc_title=u""):
+        HtmlPage.__init__(self,fname,title,context_manager,toc_title=toc_title)
         self.h_titles=h_titles
         self.colspan=str(len(h_titles)+3)
         self.special=special
         self.skip_empty=skip_empty
+
+    # def _create_context(self):
+    #     ctx={
+    #         "h_titles": self.h_titles
+    #     }
+    #     return ctx
 
     def open(self):
         HtmlPage.open(self)
@@ -1807,8 +1873,8 @@ class HtmlSpecialIndexPage(HtmlPage):
 
 
 class HtmlZoneIndexPage(HtmlSpecialIndexPage):
-    def __init__(self,out_dir,context,static_root,menus,logo_title,toc_title=""):
-        HtmlSpecialIndexPage.__init__(self,"zones-index.html","Elenco zone",out_dir,context,static_root,menus,logo_title,
+    def __init__(self,context_manager,toc_title=""):
+        HtmlSpecialIndexPage.__init__(self,"zones-index.html","Elenco zone",context_manager,
                                       toc_title=toc_title,
                                       h_titles=["records",
                                                 "views","class.",
@@ -1845,174 +1911,98 @@ class HtmlZoneIndexPage(HtmlSpecialIndexPage):
         S+="</tbody>"
         return S
 
-class HtmlZonePage(HtmlPage,ZoneOutputMethods):
-    def __init__(self,zone,out_dir,context,static_root,menus,logo_title,url_resolver,toc_title=""):
+class HtmlZonePage(HtmlPage2,ZoneOutputMethods):
+    template_name="zone.html"
+
+    def __init__(self,zone,context_manager,url_resolver,toc_title=""):
         fname="zones/zone_"+str(zone.id)+"_"+zone.name+".html"
-        HtmlPage.__init__(self,fname,zone.name,out_dir,context,static_root,menus,logo_title,toc_title=toc_title)
+        HtmlPage2.__init__(self,fname,zone.name,context_manager,toc_title=toc_title)
         self.zone=zone
         url_resolver.add_url(self.zone,self.url)
         for r in self.zone.def_rows+self.zone.rows:
             url_resolver.add_url(r,self.url+"#record"+str(r.id))
 
-    def create(self):
+    def _create_context(self):
         views="; ".join(map(str,list(self.zone.merged_views_sets)))
         dns_type_list=list(self.zone.dns_type_list)
         dns_type_list.sort()
         dns_types=", ".join(map(str,dns_type_list))
-
-
-        self.open()
-
-        if self.zone.reduced!="multiple":
-            cl=self.zone.classification
-            cl+=", "+self.zone.reduced
-            if self.zone.is_reverse():
-                cl+=", reverse"
-            self.write('<div class="zone-classification">'+cl+", record types: "+dns_types+"</div>\n")
-
-            V=list(self.zone.merged_views_sets)
-            if self.zone.reduced=="single view":
-                self.write('<div class="zone-views">view: '+V[0][0].name+"</div>\n")
-            else:
-                self.write('<div class="zone-views">views: '+", ".join(map(lambda v: v.name,V[0]))+"</div>\n")
+        ctx={
+            "zone": self.zone,
+            "views": views,
+            "dns_types": dns_types,
+            "is_reverse": self.zone.is_reverse(),
+        }
+        V=list(self.zone.merged_views_sets)
+        if self.zone.reduced=="single_view":
+            ctx["views"]=V[0][0].name
+        elif self.zone.reduced!="multiple":
+            ctx["views"]=", ".join(map(lambda v: v.name,V[0]))
         else:
-            cl=self.zone.reduced
-            if self.zone.is_reverse():
-                cl+=", reverse"
-            self.write('<div class="zone-classification">'+cl+", record types: "+dns_types+"</div>\n")
-
-            self.write('<div class="zone-views">views sets:\n')
-            self.write("<ul>\n")
+            ctx["views"]=[]
             for view_set in self.zone.merged_views_sets:
-                self.write("<li>")
-                self.write(view_set.cell())
-                self.write(" ("+self.zone.classifications_per_view_set[view_set]+")")
-                self.write("</li>\n")
-            self.write("</ul>\n")
-            self.write("</div>\n")
+                ctx["views"].append( (view_set.cell(),self.zone.classifications_per_view_set[view_set]) )
 
-        self.write("<center><table>\n")
-
-        for r in self.zone.def_rows+self.zone.rows:
-            self.write(self._html_row(r)+"\n")
-
-        self.write("</table></center>\n")
-
-        self.write("<h1 class='on-new-page'>Zone files</h1>\n")
-
+        ctx["zone_texts"]=[]
         for view_set,txt in self.zone_txt_multiple():
-            if self.zone.reduced=="multiple":
-                self.write("<h2>"+view_set.cell()+"</h2>\n")
-            self.write("<center><pre>\n")
-            self.write(txt)
-            self.write("</pre></center>\n")
+            ctx["zone_texts"].append( (view_set.cell(),txt) )
+        ctx["rows"]=[]
+        for row in self.zone.def_rows+self.zone.rows:
+            r_rowspan=0
+            for view_set,rdata_list in row.merged:
+                r_rowspan+=len(rdata_list)
+            drow={
+                "id": row.id,
+                "dns_class": row.dns_class,
+                "dns_type": row.dns_type.dns_type,
+                "owner": row.owner,
+                "rowspan": r_rowspan,
+                "merged": []
+            }
+            for view_set,rdata_list in row.merged:
+                view_set_cell=view_set.cell()
+                classification=row.classifications_per_view_set[view_set]
+                rdata_list_new=[]
+                for rdata in rdata_list:
+                    rdata_list_new.append({"ttl": rdata.ttl, "data": " ".join(rdata.data) })
+                drow["merged"].append( (view_set_cell,len(rdata_list),classification,rdata_list_new) )
+            ctx["rows"].append(drow)
+        return ctx
 
-        self.close()
+class HtmlSublistPage(HtmlPage2):
+    template_name="sublist.html"
 
-    def _html_row(self,row):
-        ref='<a name="record'+str(row.id)+'"></a>'
-        S="<tbody>"
-        S+="<tr>"
-        S+=self.new_cell(ref+row.dns_class+" "+row.dns_type.dns_type)
-        S+=self.new_cell(row.owner,td="th",colspan=5)
-        S+="</tr>\n"
-
-        r_rowspan=0
-        for view_set,rdata_list in row.merged:
-            r_rowspan+=len(rdata_list)
-
-        r_primo=True
-        for view_set,rdata_list in row.merged:
-            S+="<tr>"
-            if r_primo:
-                S+=self.new_cell("",rowspan=r_rowspan)
-                r_primo=False
-            S+=self.new_cell(view_set.cell(),rowspan=len(rdata_list))
-            S+=self.new_cell(row.classifications_per_view_set[view_set],rowspan=len(rdata_list))
-            d_primo=True
-            for rdata in rdata_list:
-                if d_primo:
-                    d_primo=False
-                else:
-                    S+="<tr>"
-                if rdata.ttl=="_":
-                    S+=self.new_cell("")
-                else:
-                    S+=self.new_cell(str(rdata.ttl))
-                S+=self.new_cell(" ".join(rdata.data))
-                S+="</tr>\n"
-
-        S+="</tbody>"
-        return S
-
-class HtmlSublistPage(HtmlPage):
-    def __init__(self,fname,title,out_dir,context,static_root,menus,logo_title,res_list):
+    def __init__(self,fname,title,context_manager,res_list):
         toc_title=str(res_list)+" "+res_list.title_add()
-        super(HtmlSublistPage,self).__init__(fname,title+": "+toc_title,out_dir,context,static_root,menus,logo_title,
+        super(HtmlSublistPage,self).__init__(fname,title+": "+toc_title,context_manager,
                                              toc_title=toc_title)
         self.next=None
         self.up=None
         self.previous=None
         self.res_list=res_list
 
-    def _write_pagination(self):
-        self.write('<div class="pagination">')
-        if self.previous: self.write(' <a href="'+self.previous.url+'"><i class="fa fa-arrow-left"></i>&nbsp;'+self.previous.toc_title+'</a>')
-        if self.up:       self.write(' <a href="'+self.up.url+'">index</a>')
-        if self.next:     self.write(' <a href="'+self.next.url+'">'+self.next.toc_title+'&nbsp;<i class="fa fa-arrow-right"></i></a>')
-        self.write('</div>')
+    def _create_context(self):
+        ctx={
+            "previous": self.previous,
+            "next": self.next,
+            "up": self.up,
+            "table_header": self.res_list.table_header_ctx(),
+            "template_row_name": self.res_list.template_row_name
+        }
+        ctx["res_list"]=[]
 
-    def open(self):
-        HtmlPage.open(self)
-        self._write_pagination()
-        self.write("<center><table class='full-width'>\n")
+        for row in self.res_list:
+            q=self.res_list.html_row_ctx(row)
+            ctx["res_list"].append(q)
+        
+        return ctx
 
-    def close(self):
-        self.write("</table></center>\n")
-        self._write_pagination()
-        HtmlPage.close(self)
-
-    def script(self):
-        s="$('tr.start_hidden').hide();\n"
-        s+="$('a.close').hide();\n"
-
-        s+="$('a.open').click(function(event){\n"
-        s+='    event.preventDefault();\n'
-        s+='    var target=$(this).data("target");\n'
-        s+='    var close=$(this).data("close");\n'
-        s+='    $(target).show();\n'
-        s+='    $(close).show();\n'
-        s+='    $(this).hide();\n'
-        s+="});\n"
-        s+="$('a.close').click(function(event){\n"
-        s+='    event.preventDefault();\n'
-        s+='    var target=$(this).data("target");\n'
-        s+='    var open=$(this).data("open");\n'
-        s+='    $(target).hide();\n'
-        s+='    $(open).show();\n'
-        s+='    $(this).hide();\n'
-        s+="});\n"
-        return s
 
     def size(self): 
         """ Il numero di oggetti.
         
         :return: Lunghezza di self.res_list (PaginationList). """
         return len(self.res_list)
-
-    def create(self):
-        """ Costruisce una tabella con l'elenco di oggetti in self.res_list.
-
-        L'header della tabella è dato da self.res_list.table_header().
-
-        Il contenuto della tabella è dato da self.res_list.table_rows() (che è una lista di stringhe).
-
-        """
-        self.open()
-        self.write(self.res_list.table_header()+"\n")
-        for r in self.res_list.table_rows():
-            self.write(r+"\n")
-        self.close()
 
     def toc_row(self):
         """ Costruisce la riga nella tabella indice dell'HtmlListPage madre di questa.
@@ -2027,20 +2017,25 @@ class HtmlSublistPage(HtmlPage):
         
         :return: Una riga formata dalle celle di self.res_list. """
 
-        S='<tbody><tr data-href="'+self.url+'">'
+        h1=self.res_list.toc_title_cells()
+        h2=self.res_list.toc_size_cells()
+        h3=self.res_list.toc_range_cells()
+        S=h1+h2+h3
 
-        S+=self.res_list.toc_title_cells()
-        S+=self.res_list.toc_size_cells()
-        S+=self.res_list.toc_range_cells()
+        L=len(S)
+        tab=Table(1,L)
+        tab.set_row(0,S)
+        tab.set_row_data(0, [ ("href",self.url) ] )
             
-        S+="</tr></tbody>\n"
-        return S
+        return tab
 
     def known_vlan(self): return self.res_list.known_vlan()
 
-class HtmlListPage(HtmlPage):
-    def __init__(self,fname,title,out_dir,context,static_root,menus,logo_title,subdir,subprefix,res_list,toc_title=""):
-        super(HtmlListPage,self).__init__(fname,title,out_dir,context,static_root,menus,logo_title,toc_title=toc_title)
+class HtmlListPage(HtmlPage2):
+    template_name="list.html"
+
+    def __init__(self,fname,title,context_manager,subdir,subprefix,res_list,toc_title=""):
+        super(HtmlListPage,self).__init__(fname,title,context_manager,toc_title=toc_title)
         self.sublist_pages=[]
         self.subprefix=subprefix
         self.subdir=subdir
@@ -2058,7 +2053,7 @@ class HtmlListPage(HtmlPage):
         ind=len(self.sublist_pages)
 
         new_page=HtmlSublistPage(self.subdir+"/"+self.subprefix+"-"+("%04d" % ind)+".html",
-                                 title,self.out_dir,self.context,self.static_root,self.menus,self.logo_title,res_sublist)
+                                 title,self.context_manager,res_sublist)
         if ind!=0: 
             new_page.previous=self.sublist_pages[-1]
             self.sublist_pages[-1].next=new_page
@@ -2066,93 +2061,45 @@ class HtmlListPage(HtmlPage):
         self.sublist_pages.append(new_page)
         return new_page
 
-    def create(self):
-        self.open()
-        self.write("<table>")
-        self.write(self.res_list.header_table())
-
-        for sub in self.sublist_pages:
-            self.write(sub.toc_row())
-            sub.create()
-        self.write("</table>")
-        self.close()
-
-    def script(self):
-        s="$('tr[data-href]').css( 'cursor', 'pointer' )"
-        s+=".on('click', function() {\n"
-        s+="    document.location = $(this).data('href');\n"
-        s+="});\n"
-        return s
+    def _create_context(self):
+        ctx={
+            "table_header": self.res_list.header_table(),
+        }
+        ctx["table_rows"]=[]
+        for pag in self.sublist_pages:
+            row=pag.toc_row()
+            print unicode_convert(row)
+            ctx["table_rows"].append(row)
+        return ctx
     
 
 class HtmlView(GlobalView):
     sub_directories=[ "zones","ips","names" ]
     special_records=[ "NS","MX","SRV","AFSDB","TXT","SPF" ]
-    css_list=[ "dinosaurus.css",
-               "font-awesome.min.css" ]
-    fonts_list= [ "FontAwesome.otf",
-                  "fontawesome-webfont.svg",
-                  "fontawesome-webfont.woff",
-                  "fontawesome-webfont.eot",
-                  "fontawesome-webfont.ttf",  
-                  "fontawesome-webfont.woff2" ]
-    js_list=[ "jquery-1.11.3.min.js" ]
-    img_list=[ "icon.png","logo-bw.png" ]
 
-    def __init__(self,dirout,context,dirout_static,static_root,menus,vlan_list,ping_map,labelers={}):
-        GlobalView.__init__(self,dirout)
-        self.dirout_static=dirout_static
-        self.context=context
-        self.static_root=static_root
-        self.menus=menus
+    def __init__(self,database,context_manager,vlan_manager,labelers={}):
+        GlobalView.__init__(self,database,context_manager.out_dir)
+
         self.labelers=labelers
-        self.vlan_list=vlan_list
-        self.ping_map=ping_map
-
-        self.menus["single_db"]=[ (self.context+"/index.html","Indice"),
-                                  (self.context+"/zones-index.html","Zone"),
-                                  (self.context+"/ips-index.html","IP"),
-                                  (self.context+"/names-index.html","Nomi"),
-                                  (self.context+"/NS-index.html","NS"),
-                                  (self.context+"/MX-index.html","MX"),
-                                  (self.context+"/SRV-index.html","SRV"),
-                                  (self.context+"/AFSDB-index.html","AFSDB"),
-                                  (self.context+"/TXT-index.html","TXT"),
-                                  (self.context+"/SPF-index.html","SPF") ]
-
-        self.dirout_static=dirout_static
+        self.vlan_manager=vlan_manager
+        self.context_manager=context_manager
         self.url_resolver=UrlResolver()
     
-    def make_files(self,dns_db):
+    def _make_files(self):
+        dns_db=self.database
         P=[]
         for v in dns_db.views:
             P.append( (str(v),dns_db.zones_by_views[v.id]) )
         P.append( ("Merged",dns_db.zones_multiple_merged) )
         P.append( ("Multiple",dns_db.zones_multiple_views) )
 
-        for dirsrc,lab,flist in [ (TEMPLATES_CSS,"css",self.css_list),
-                                  (TEMPLATES_JS,"js",self.js_list),
-                                  (TEMPLATES_IMG,"img",self.img_list),
-                                  (TEMPLATES_FONTS,"fonts",self.fonts_list) ]:
-            try:
-                os.makedirs(self.dirout_static+"/"+lab)
-            except os.error, e:
-                pass
-            for f in flist:
-                if type(f)==tuple:
-                    templ,dest=f
-                else:
-                    templ=f
-                    dest=f
-                if os.path.exists(dest): continue
-                shutil.copyfile(dirsrc+"/"+templ,self.dirout_static+"/"+lab+"/"+dest)
-
         other_indexes=[]
-        other_indexes.append(HtmlZoneIndexPage(self.dirout,self.context,self.static_root,self.menus,dns_db.name))
+
+        other_indexes.append(HtmlZoneIndexPage(self.context_manager))
 
         for t in self.special_records:
             other_indexes.append(HtmlSpecialIndexPage(t+"-index.html","Elenco "+t.upper(),
-                                                      self.dirout,self.context,self.static_root,self.menus,dns_db.name,special=t))
+                                                      self.context_manager,special=t))
 
         for hpage in other_indexes: hpage.open()
 
@@ -2160,15 +2107,15 @@ class HtmlView(GlobalView):
             for hpage in other_indexes:
                 hpage.write_section_title(str(v))
             for z in zlist:
-                zone_page=HtmlZonePage(z,self.dirout,self.context,self.static_root,self.menus,dns_db.name,self.url_resolver)
+                zone_page=HtmlZonePage(z,self.context_manager,self.url_resolver)
                 zone_page.create()
                 for hpage in other_indexes:
                     hpage.write_zone_row(zone_page)
 
         for hpage in other_indexes: hpage.close()
 
-        pag_ip=PaginationByIp(dns_db.res_ips,PAGINATION,self.url_resolver,self.vlan_list,self.ping_map)
-        pag_name=PaginationByName(dns_db.res_names,PAGINATION,self.url_resolver,self.vlan_list,self.ping_map)
+        pag_ip=PaginationByIp(dns_db.res_ips,PAGINATION,self.url_resolver,self.vlan_manager)
+        pag_name=PaginationByName(dns_db.res_names,PAGINATION,self.url_resolver)
         if self.labelers.has_key("ip"):
             pag_ip.labelers+=self.labelers["ip"]
         if self.labelers.has_key("name"):
@@ -2177,18 +2124,17 @@ class HtmlView(GlobalView):
         elenco_ip=self._build_elenco("ips","IP",pag_ip,dns_db)
         elenco_nomi=self._build_elenco("names","Nomi",pag_name,dns_db)
 
-
         elenco_ip.create()
         elenco_nomi.create()
 
-        index_html=HtmlIndexPage(self.dirout,self.context,self.static_root,self.menus,dns_db.name,[elenco_ip,elenco_nomi]+other_indexes)
+        index_html=HtmlIndexPage(self.context_manager,[elenco_ip,elenco_nomi]+other_indexes)
         index_html.create()
 
 
     def _build_elenco(self,prefix,title,res_list,dns_db):
         res_paginated=res_list.paginate()
 
-        index_html=HtmlListPage(prefix+"-index.html",title,self.dirout,self.context,self.static_root,self.menus,dns_db.name,
+        index_html=HtmlListPage(prefix+"-index.html",title,self.context_manager,
                                 prefix,prefix,res_list)
 
         for L in res_paginated:
@@ -2200,9 +2146,6 @@ class HtmlView(GlobalView):
 
         return index_html
 
-class HtmlLocalView(HtmlView):
-    def __init__(self,dirout,dirout_static,menus,vlan_list,ping_map,labelers={}):
-        HtmlView.__init__(self,dirout,"file:///"+dirout,dirout_static,"file:///"+dirout_static,menus,vlan_list,ping_map,labelers=labelers)
     
 ################################################################################
 ################################################################################
@@ -2358,8 +2301,8 @@ class ConfView(GlobalView):
     zones_directory="zones"
     target_context="/var/named"
 
-    def __init__(self,dirout,views_params={}):
-        GlobalView.__init__(self,dirout)
+    def __init__(self,database,dirout,views_params={}):
+        GlobalView.__init__(self,database,dirout)
         self.views_params=views_params
     
     def _zone_dirnames_per_view_set(self,zone):
@@ -2437,7 +2380,8 @@ class ConfView(GlobalView):
 
         view_new_index.create()
 
-    def make_files(self,dns_db):
+    def _make_files(self):
+        dns_db=self.database
         self._build_index_conf(dns_db)
 
         for v in dns_db.views:
@@ -2454,10 +2398,12 @@ class ConfView(GlobalView):
 
 
 class IpListView(object):
-    def __init__(self,fname):
+    def __init__(self,database,fname):
         self.fname=fname
+        self.database=database
 
-    def output(self,dns_db):
+    def output(self):
+        dns_db=self.database
         fd=open(self.fname,"w")
         for res in dns_db.res_ips:
             fd.write(res.ip+"\n")

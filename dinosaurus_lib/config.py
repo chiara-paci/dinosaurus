@@ -13,6 +13,8 @@ fd=open(VERSION_FILE,'r')
 VERSION="".join(fd.readlines()).strip()
 fd.close()
 
+THEMES_DIR=BASE_DIR+"/share/themes"
+
 TEMPLATES_HTML=BASE_DIR+"/var/templates/html"
 TEMPLATES_CSS=BASE_DIR+"/var/templates/css"
 TEMPLATES_IMG=BASE_DIR+"/var/templates/img"

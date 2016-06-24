@@ -5,6 +5,8 @@ import copy
 from dinosaurus_lib.config import *
 from dinosaurus_lib.resolutions import *
 
+### OLD
+
 def normalize_classification(ret):
     if len(ret)>2: return "mixed"
     if len(ret)==2:
@@ -12,7 +14,6 @@ def normalize_classification(ret):
         ret.remove("cname")
     if len(ret)==0: return ""
     return ret.pop()
-
 
 class WrongRecordSize(Exception):
     def __init__(self, value):

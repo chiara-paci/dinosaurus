@@ -65,8 +65,8 @@ else
     exit 1
 fi
 
-OUT_SPOOL=$OUT_DIR/spool
-OUT_PREFIX=$OUT_SPOOL/elab
+#OUT_SPOOL=$OUT_DIR/spool
+#OUT_PREFIX=$OUT_SPOOL/elab
 
 #mkdir -p $OUT_SPOOL
 
@@ -213,16 +213,16 @@ then
     done
     cat ${LINUX_PREFIX}.linux_yes ${WINDOWS_PREFIX}.windows > ${OUT_SPOOL}/elab.all
 
-    $L_PARSE_VIEW ${OUT_SPOOL}/elab.all ${VLANS_DIR}/vlans.csv ${CMBD_DIR}/cmdb.csv ${OUT_DIR} ${OUT_LABEL}
+    $L_PARSE_VIEW ${OUT_SPOOL}/elab.all ${VLANS_DIR}/vlans.csv ${CMBD_DIR}/cmdb.csv ${TEMPLATES_DIR} ${OUT_DIR} ${OUT_LABEL}
 
-    for h in $TARGET_HOSTS
-    do
-	echo "${h}:"
-	echo "    ${OUT_DIR}/${OUT_LABEL}_html/ => ${TARGET_WWW}/${OUT_LABEL}_html/"
-	rsync -aqPH ${OUT_DIR}/${OUT_LABEL}_html/ chiara-paci@${h}:${TARGET_WWW}/${OUT_LABEL}_html/
-	echo "    ${OUT_DIR}/static/   => ${TARGET_WWW}/static/"
-	rsync -aqPH ${OUT_DIR}/static/   chiara-paci@${h}:${TARGET_WWW}/static/
-    done
+    # for h in $TARGET_HOSTS
+    # do
+    # 	echo "${h}:"
+    # 	echo "    ${OUT_DIR}/${OUT_LABEL}_html/ => ${TARGET_WWW}/${OUT_LABEL}_html/"
+    # 	rsync -aqPH ${OUT_DIR}/${OUT_LABEL}_html/ chiara-paci@${h}:${TARGET_WWW}/${OUT_LABEL}_html/
+    # 	echo "    $STATIC/   => ${TARGET_WWW}/static/"
+    # 	rsync -aqPH $STATIC/   chiara-paci@${h}:${TARGET_WWW}/static/
+    # done
 fi
 
 
